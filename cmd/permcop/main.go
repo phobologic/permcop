@@ -13,7 +13,6 @@ import (
 	"github.com/mikecafarella/permcop/internal/config"
 	"github.com/mikecafarella/permcop/internal/hook"
 	"github.com/mikecafarella/permcop/internal/importer"
-	"github.com/mikecafarella/permcop/internal/interactive"
 	"github.com/mikecafarella/permcop/internal/parser"
 	"github.com/mikecafarella/permcop/internal/rules"
 )
@@ -24,8 +23,7 @@ var version = "dev"
 const usage = `permcop — Claude Code bash permission enforcer
 
 Usage:
-  permcop check [--no-interactive]                Read Claude Code hook JSON from stdin, exit 0 (allow) or 2 (deny)
-                                                  Prompts to add a rule when TTY available and command hits default deny
+  permcop check                                   Read Claude Code hook JSON from stdin, exit 0 (allow) or 2 (deny)
   permcop explain <cmd>                           Dry-run: show rule evaluation without logging or blocking
   permcop validate [file]                         Validate config (default: ~/.config/permcop/config.toml)
   permcop init [--global]                         Set up Claude Code hook and create config
@@ -98,13 +96,7 @@ func main() {
 		fmt.Printf("permcop %s\n", version)
 		os.Exit(0)
 	case "check":
-		noInteractive := false
-		for _, arg := range os.Args[2:] {
-			if arg == "--no-interactive" {
-				noInteractive = true
-			}
-		}
-		runCheck(noInteractive)
+		runCheck()
 	case "explain":
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: permcop explain <command>")
@@ -152,9 +144,7 @@ func main() {
 // runCheck is the main hook entry point. It reads JSON from stdin, evaluates the
 // tool call, writes a human-readable reason to stdout on deny, and exits 0 or 2.
 // All failures — including unrecognized hook format — are fail-closed (deny) and logged.
-// When noInteractive is false and a TTY is available, default-deny results trigger
-// an interactive prompt that can save a new rule and allow the command.
-func runCheck(noInteractive bool) {
+func runCheck() {
 	cwd, err := os.Getwd()
 	if err != nil {
 		// Fail-closed: cannot determine CWD means file path resolution is unsafe.
@@ -230,40 +220,16 @@ func runCheck(noInteractive bool) {
 		os.Exit(0)
 	}
 
-	// Interactive flow: when a command falls through to default deny and a TTY
-	// is available, offer to add a rule to .permcop.local.toml and allow this
-	// invocation. Explicit deny matches, parse errors, and sudo blocks skip
-	// this path and are denied immediately.
-	if !result.Allowed && result.DefaultDeny && !noInteractive {
-		localCfgPath := filepath.Join(cwd, ".permcop.local.toml")
-		ok, err := interactive.PromptAndAdd(result, localCfgPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "permcop: interactive prompt error: %v\n", err)
-			// fall through to deny
-		} else if ok {
-			// Rule was written — reload config and re-evaluate.
-			cfg2, err := config.Load(cwd)
-			if err == nil {
-				engine2, err := rules.New(cfg2, logger)
-				if err == nil {
-					var result2 *rules.Result
-					switch in.Kind {
-					case hook.ToolBash:
-						result2, _ = engine2.Check(in.Bash.Command, cwd)
-					case hook.ToolRead:
-						result2, _ = engine2.CheckFile(absolutePath(in.File.FilePath, cwd), parser.UnitReadFile)
-					case hook.ToolWrite, hook.ToolEdit, hook.ToolMultiEdit:
-						result2, _ = engine2.CheckFile(absolutePath(in.File.FilePath, cwd), parser.UnitWriteFile)
-					}
-					if result2 != nil && result2.Allowed {
-						os.Exit(0)
-					}
-				}
-			}
-			// Rule was saved but re-evaluation didn't allow — deny and let the user investigate.
-			fmt.Fprintln(os.Stdout, "permcop: rule saved but command still not covered; check your config")
-			os.Exit(2)
-		}
+	// No rule matched — output nothing and exit 0 so Claude Code's own
+	// permission system handles the decision. Still log for audit trail.
+	if result.FallThrough {
+		_ = logger.Log(audit.Entry{
+			Timestamp:       time.Now(),
+			Decision:        audit.DecisionPassThrough,
+			Reason:          "no matching rule; deferred to Claude Code",
+			OriginalCommand: result.OriginalCommand,
+		})
+		os.Exit(0)
 	}
 
 	exitWithResult(result)
@@ -356,7 +322,8 @@ func runExplain(command string) {
 	fmt.Println()
 	fmt.Println()
 
-	if result.Allowed {
+	switch {
+	case result.Allowed:
 		fmt.Printf("Result:   ALLOW\n")
 		if result.DecidingRule != "" {
 			fmt.Printf("Rule:     %q\n", result.DecidingRule)
@@ -370,7 +337,9 @@ func runExplain(command string) {
 		if result.Reason != "" {
 			fmt.Printf("Warning:  %s\n", result.Reason)
 		}
-	} else {
+	case result.FallThrough:
+		fmt.Printf("Result:   PASS (no matching rule — deferred to Claude Code)\n")
+	default:
 		fmt.Printf("Result:   DENY\n")
 		if result.Reason != "" {
 			fmt.Printf("Reason:   %s\n", result.Reason)
@@ -849,11 +818,10 @@ func confirmAppend(destPath, content string) bool {
 }
 
 const starterConfig = `# permcop configuration
-# All commands are denied by default.
 # Rules are evaluated in order.
 # Pass 1: if ANY deny pattern matches ANY command unit -> DENY
-# Pass 2: if ALL command units are covered by a single rule's allow patterns -> ALLOW
-# Otherwise: DENY
+# Pass 2: if ALL command units are covered by allow patterns -> ALLOW
+# No match -> PASS (deferred to Claude Code's own permission system)
 
 [defaults]
 log_file = "~/.local/share/permcop/audit.log"

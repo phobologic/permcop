@@ -1,6 +1,6 @@
 # permcop
 
-A rule-based permission enforcer for [Claude Code](https://claude.ai/code). Intercepts Claude Code tool calls via PreToolUse hooks and evaluates them against an ordered, deny-by-default rule set.
+A rule-based permission filter for [Claude Code](https://claude.ai/code). Intercepts Claude Code tool calls via PreToolUse hooks and evaluates them against an ordered rule set. Explicit deny rules block commands; explicit allow rules bypass Claude Code's approval prompt; everything else defers to Claude Code's own permission system.
 
 ## How it works
 
@@ -10,7 +10,7 @@ permcop integrates as a Claude Code hook. Before Claude runs any Bash command, t
 2. Runs a **two-pass evaluation** against your config:
    - **Pass 1 — Deny scan:** if any deny pattern matches any unit across all rules → DENY
    - **Pass 2 — Allow scan:** each unit independently finds any rule that covers it; if all units are covered → ALLOW
-   - **Default:** DENY (no match = blocked)
+   - **Default:** PASS (no match = deferred to Claude Code's permission system)
 3. Logs every decision to an audit log
 4. Exits `0` (allow) or `2` (deny) — Claude Code sees the exit code and acts accordingly
 
@@ -48,7 +48,7 @@ subshell_depth_limit = 3
 # Rules are evaluated in order.
 # Pass 1: ANY deny pattern matching ANY unit → DENY immediately.
 # Pass 2: each unit independently finds any rule that covers it; all must be covered → ALLOW.
-# No match → DENY.
+# No match → PASS (deferred to Claude Code's permission system).
 
 [[rules]]
 name = "Allow safe git operations"
@@ -198,9 +198,9 @@ permcop is designed for **Bash**. That's where the real attack surface is: shell
 
 **Why not hook file tools by default?**
 
-Claude Code already gates file operations through its own permission system (approval dialogs, `autoApprove` settings). Adding permcop's deny-by-default on top creates friction for Claude's internal operations — writing plan files, updating memory, editing config — with little security benefit. If something slips past Claude Code's file permission system, the blast radius is far smaller than an unchecked shell command anyway.
+Claude Code already gates file operations through its own permission system (approval dialogs, `autoApprove` settings). Hooking file tools as well creates friction for Claude's internal operations — writing plan files, updating memory, editing config — with little added benefit. If something slips past Claude Code's file permission system, the blast radius is far smaller than an unchecked shell command anyway.
 
-If you do want to gate file tool calls, add the matchers manually to your Claude settings (see [Hook wiring](#hook-wiring)). Be aware you will need explicit `allow_read`/`allow_write` rules covering Claude's internal paths (`~/.claude/**`) or those operations will be silently denied.
+If you do want to gate file tool calls, add the matchers manually to your Claude settings (see [Hook wiring](#hook-wiring)). Without explicit allow rules covering those paths, operations will fall through to Claude Code's own prompt.
 
 ## Commands
 
@@ -256,6 +256,10 @@ Every decision is logged to `~/.local/share/permcop/audit.log` (configurable).
   original: git status && git push origin main
   units:    [git status] [git push origin main]
   hit:      git push origin main
+
+2026-03-04T04:58:25Z PASS
+  original: make build
+  reason:   no matching rule; deferred to Claude Code
 ```
 
 **JSON format** (`log_format = "json"`): one object per line, suitable for `jq`.

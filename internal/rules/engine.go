@@ -14,6 +14,112 @@ import (
 	"github.com/mikecafarella/permcop/internal/parser"
 )
 
+// expandVarsRe matches ${VAR} and $VAR shell variable references.
+var expandVarsRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// compiledPattern holds a pre-compiled pattern for fast repeated matching.
+// Glob and regex patterns are compiled once at engine construction.
+type compiledPattern struct {
+	p  config.Pattern
+	re *regexp.Regexp // non-nil for PatternRegex
+	g  glob.Glob      // non-nil for PatternGlob
+}
+
+func newCompiledPattern(p config.Pattern) compiledPattern {
+	cp := compiledPattern{p: p}
+	switch p.Type {
+	case config.PatternGlob, "":
+		cp.g, _ = glob.Compile(p.Pattern)
+	case config.PatternRegex:
+		cp.re, _ = regexp.Compile(p.Pattern)
+	}
+	return cp
+}
+
+func (cp compiledPattern) match(value string) bool {
+	switch cp.p.Type {
+	case config.PatternExact:
+		return value == cp.p.Pattern
+	case config.PatternPrefix:
+		return value == cp.p.Pattern || strings.HasPrefix(value, cp.p.Pattern+" ")
+	case config.PatternGlob, "":
+		if cp.g == nil {
+			return false
+		}
+		return cp.g.Match(value)
+	case config.PatternRegex:
+		if cp.re == nil {
+			return false
+		}
+		return cp.re.MatchString(value)
+	}
+	return false
+}
+
+// compiledGlobPath holds a pre-compiled path glob with ~/ expanded.
+type compiledGlobPath struct {
+	raw string    // original pattern string, used for audit output
+	g   glob.Glob // nil if compilation failed (treated as non-matching)
+}
+
+func newCompiledGlobPath(pattern, homeDir string) compiledGlobPath {
+	raw := pattern
+	if strings.HasPrefix(pattern, "~/") {
+		if homeDir == "" {
+			return compiledGlobPath{raw: raw}
+		}
+		pattern = homeDir + pattern[1:]
+	}
+	g, _ := glob.Compile(pattern, filepath.Separator)
+	return compiledGlobPath{raw: raw, g: g}
+}
+
+func (c compiledGlobPath) match(path string) bool {
+	return c.g != nil && c.g.Match(path)
+}
+
+// compiledRule mirrors config.Rule with all patterns pre-compiled.
+type compiledRule struct {
+	rule       *config.Rule
+	allow      []compiledPattern
+	deny       []compiledPattern
+	allowRead  []compiledGlobPath
+	denyRead   []compiledGlobPath
+	allowWrite []compiledGlobPath
+	denyWrite  []compiledGlobPath
+}
+
+func compileRules(rules []config.Rule, homeDir string) []compiledRule {
+	cr := make([]compiledRule, len(rules))
+	for i := range rules {
+		r := &rules[i]
+		cr[i].rule = r
+		cr[i].allow = compilePatterns(r.Allow)
+		cr[i].deny = compilePatterns(r.Deny)
+		cr[i].allowRead = compileGlobPaths(r.AllowRead, homeDir)
+		cr[i].denyRead = compileGlobPaths(r.DenyRead, homeDir)
+		cr[i].allowWrite = compileGlobPaths(r.AllowWrite, homeDir)
+		cr[i].denyWrite = compileGlobPaths(r.DenyWrite, homeDir)
+	}
+	return cr
+}
+
+func compilePatterns(ps []config.Pattern) []compiledPattern {
+	out := make([]compiledPattern, len(ps))
+	for i, p := range ps {
+		out[i] = newCompiledPattern(p)
+	}
+	return out
+}
+
+func compileGlobPaths(patterns []string, homeDir string) []compiledGlobPath {
+	out := make([]compiledGlobPath, len(patterns))
+	for i, p := range patterns {
+		out[i] = newCompiledGlobPath(p, homeDir)
+	}
+	return out
+}
+
 // Result is the outcome of evaluating a command against the rule set.
 type Result struct {
 	audit.Entry
@@ -22,22 +128,35 @@ type Result struct {
 
 // Engine evaluates commands against a config.
 type Engine struct {
-	cfg     *config.Config
-	logger  *audit.Logger
-	env     map[string]string // variable environment for expand_variables; nil = use os.Environ()
-	homeDir string            // resolved once at construction for ~/ expansion in file patterns
+	cfg           *config.Config
+	logger        *audit.Logger
+	env           map[string]string // variable environment for expand_variables; nil = use os.Environ()
+	homeDir       string            // resolved once at construction for ~/ expansion in file patterns
+	compiledRules []compiledRule    // pre-compiled patterns for all rules
 }
 
 // New creates an Engine using the process environment for variable expansion.
 func New(cfg *config.Config, logger *audit.Logger) *Engine {
 	homeDir, _ := os.UserHomeDir()
-	return &Engine{cfg: cfg, logger: logger, env: osEnvMap(), homeDir: homeDir}
+	return &Engine{
+		cfg:           cfg,
+		logger:        logger,
+		env:           osEnvMap(),
+		homeDir:       homeDir,
+		compiledRules: compileRules(cfg.Rules, homeDir),
+	}
 }
 
 // NewWithEnv creates an Engine with an explicit environment map, primarily for testing.
 func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string) *Engine {
 	homeDir, _ := os.UserHomeDir()
-	return &Engine{cfg: cfg, logger: logger, env: env, homeDir: homeDir}
+	return &Engine{
+		cfg:           cfg,
+		logger:        logger,
+		env:           env,
+		homeDir:       homeDir,
+		compiledRules: compileRules(cfg.Rules, homeDir),
+	}
 }
 
 // osEnvMap converts os.Environ() into a map for fast lookup.
@@ -125,11 +244,11 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 
 	// --- Pass 1: Deny scan (all rules × all units) ---
 	// Only explicit deny patterns are evaluated here.
-	for i := range e.cfg.Rules {
-		r := &e.cfg.Rules[i]
+	for i := range e.compiledRules {
+		cr := e.compiledRules[i]
 		for j := range parsed.Units {
 			u := parsed.Units[j] // copy; may be modified by expansion
-			if r.ExpandVariables && u.HasVariable {
+			if cr.rule.ExpandVariables && u.HasVariable {
 				expanded, ok := expandVars(u.Value, e.env)
 				if !ok {
 					// Variable not in env — skip this rule for this unit (not a deny).
@@ -138,8 +257,8 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				u.Value = expanded
 				u.HasVariable = false
 			}
-			if matched, patStr := matchesDenyPattern(r, &u, e.homeDir); matched {
-				return deny("matched deny pattern", r.Name, patStr, &u)
+			if matched, patStr := matchesDenyPattern(cr, &u); matched {
+				return deny("matched deny pattern", cr.rule.Name, patStr, &u)
 			}
 		}
 	}
@@ -154,13 +273,13 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 		orig := &parsed.Units[i]
 		covered := false
 
-		for j := range e.cfg.Rules {
-			r := &e.cfg.Rules[j]
+		for j := range e.compiledRules {
+			cr := e.compiledRules[j]
 
 			u := *orig // copy; may be modified by expansion
 
 			// expand_variables: resolve env vars before matching this rule.
-			if r.ExpandVariables && u.HasVariable {
+			if cr.rule.ExpandVariables && u.HasVariable {
 				expanded, ok := expandVars(u.Value, e.env)
 				if !ok {
 					// Variable not in env — this rule cannot cover the unit.
@@ -171,20 +290,20 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 			}
 
 			// Subshell: this rule's effective setting determines if it can cover the unit.
-			if e.cfg.EffectiveDenySubshells(r) && u.HasSubshell {
+			if e.cfg.EffectiveDenySubshells(cr.rule) && u.HasSubshell {
 				continue
 			}
 
 			// Variable: this rule's effective setting determines if it can cover the unit.
-			varAction := e.cfg.EffectiveVariableAction(r)
+			varAction := e.cfg.EffectiveVariableAction(cr.rule)
 			if u.HasVariable && varAction == config.VariableActionDeny {
 				continue
 			}
 
-			if ok, pat := unitCoveredByRule(e.cfg, r, u, e.homeDir); ok {
+			if ok, pat := unitCoveredByRule(cr, u); ok {
 				lastUnit = orig
 				lastPat = pat
-				lastRule = r.Name
+				lastRule = cr.rule.Name
 				covered = true
 				if u.HasVariable && varAction == config.VariableActionWarn {
 					warnReason = "variable in command (unknown_variable_action=warn)"
@@ -239,18 +358,18 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 	}
 
 	// Pass 1: Deny scan
-	for i := range e.cfg.Rules {
-		r := &e.cfg.Rules[i]
-		if matched, patStr := matchesDenyPattern(r, &unit, e.homeDir); matched {
-			return deny("matched deny pattern", r.Name, patStr)
+	for i := range e.compiledRules {
+		cr := e.compiledRules[i]
+		if matched, patStr := matchesDenyPattern(cr, &unit); matched {
+			return deny("matched deny pattern", cr.rule.Name, patStr)
 		}
 	}
 
 	// Pass 2: Allow scan (file-only rules can cover a single file unit)
-	for i := range e.cfg.Rules {
-		r := &e.cfg.Rules[i]
-		if covered, pat := unitCoveredByRule(e.cfg, r, unit, e.homeDir); covered {
-			return allow(r.Name, pat)
+	for i := range e.compiledRules {
+		cr := e.compiledRules[i]
+		if covered, pat := unitCoveredByRule(cr, unit); covered {
+			return allow(cr.rule.Name, pat)
 		}
 	}
 
@@ -259,89 +378,54 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 
 // --- Matching helpers ---
 
-func matchesDenyPattern(r *config.Rule, u *parser.CheckableUnit, homeDir string) (bool, string) {
+func matchesDenyPattern(cr compiledRule, u *parser.CheckableUnit) (bool, string) {
 	switch u.Kind {
 	case parser.UnitCommand:
-		for _, p := range r.Deny {
-			if matchPattern(p, u.Value) {
-				return true, patternString(p)
+		for _, cp := range cr.deny {
+			if cp.match(u.Value) {
+				return true, patternString(cp.p)
+
 			}
 		}
 	case parser.UnitReadFile:
-		for _, pat := range r.DenyRead {
-			if matchGlobPath(pat, u.Value, homeDir) {
-				return true, "deny_read:" + pat
+		for _, gp := range cr.denyRead {
+			if gp.match(u.Value) {
+				return true, "deny_read:" + gp.raw
 			}
 		}
 	case parser.UnitWriteFile:
-		for _, pat := range r.DenyWrite {
-			if matchGlobPath(pat, u.Value, homeDir) {
-				return true, "deny_write:" + pat
+		for _, gp := range cr.denyWrite {
+			if gp.match(u.Value) {
+				return true, "deny_write:" + gp.raw
 			}
 		}
 	}
 	return false, ""
 }
 
-func unitCoveredByRule(_ *config.Config, r *config.Rule, u parser.CheckableUnit, homeDir string) (bool, string) {
+func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit) (bool, string) {
 	switch u.Kind {
 	case parser.UnitCommand:
-		for _, p := range r.Allow {
-			if matchPattern(p, u.Value) {
-				return true, patternString(p)
+		for _, cp := range cr.allow {
+			if cp.match(u.Value) {
+				return true, patternString(cp.p)
+
 			}
 		}
 	case parser.UnitReadFile:
-		for _, pat := range r.AllowRead {
-			if matchGlobPath(pat, u.Value, homeDir) {
-				return true, "allow_read:" + pat
+		for _, gp := range cr.allowRead {
+			if gp.match(u.Value) {
+				return true, "allow_read:" + gp.raw
 			}
 		}
 	case parser.UnitWriteFile:
-		for _, pat := range r.AllowWrite {
-			if matchGlobPath(pat, u.Value, homeDir) {
-				return true, "allow_write:" + pat
+		for _, gp := range cr.allowWrite {
+			if gp.match(u.Value) {
+				return true, "allow_write:" + gp.raw
 			}
 		}
 	}
 	return false, ""
-}
-
-func matchPattern(p config.Pattern, value string) bool {
-	switch p.Type {
-	case config.PatternExact:
-		return value == p.Pattern
-	case config.PatternPrefix:
-		return value == p.Pattern || strings.HasPrefix(value, p.Pattern+" ")
-	case config.PatternGlob, "":
-		g, err := glob.Compile(p.Pattern)
-		if err != nil {
-			return false
-		}
-		return g.Match(value)
-	case config.PatternRegex:
-		re, err := regexp.Compile(p.Pattern)
-		if err != nil {
-			return false
-		}
-		return re.MatchString(value)
-	}
-	return false
-}
-
-func matchGlobPath(pattern, path, homeDir string) bool {
-	if strings.HasPrefix(pattern, "~/") {
-		if homeDir == "" {
-			return false
-		}
-		// Replace ~ with homeDir; pattern[1:] starts with /, so homeDir + pattern[1:] is correct.
-		pattern = homeDir + pattern[1:]
-	}
-	g, err := glob.Compile(pattern, filepath.Separator)
-	if err != nil {
-		return false
-	}
-	return g.Match(path)
 }
 
 func patternString(p config.Pattern) string {
@@ -352,12 +436,10 @@ func patternString(p config.Pattern) string {
 // Returns (expanded, true) if all variables were resolved, or ("", false) if
 // any variable was missing from env.
 func expandVars(s string, env map[string]string) (string, bool) {
-	// Match ${VAR} and $VAR (identifiers: [A-Za-z_][A-Za-z0-9_]*)
-	re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 	allResolved := true
-	result := re.ReplaceAllStringFunc(s, func(match string) string {
+	result := expandVarsRe.ReplaceAllStringFunc(s, func(match string) string {
 		// Extract variable name from either ${VAR} or $VAR form.
-		sub := re.FindStringSubmatch(match)
+		sub := expandVarsRe.FindStringSubmatch(match)
 		name := sub[1]
 		if name == "" {
 			name = sub[2]

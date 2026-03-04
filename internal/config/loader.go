@@ -62,26 +62,40 @@ func warnBroadAllowRules(cfg *Config) {
 }
 
 const (
-	globalConfigPath = ".config/permcop/config.toml"
-	projectFileName  = ".permcop.toml"
+	globalConfigPath      = ".config/permcop/config.toml"
+	globalLocalConfigPath = ".config/permcop/config.local.toml"
+	projectFileName       = ".permcop.toml"
+	projectLocalFileName  = ".permcop.local.toml"
 )
 
-// Load reads the global config and optionally merges a per-project overlay.
-// Project rules are prepended (evaluated before global rules).
-// If the global config does not exist, returns a deny-everything config.
-// If the global config exists but cannot be parsed, returns an error.
+// Load reads up to four config layers and merges them in priority order:
+//
+//  1. project-local  (.permcop.local.toml — gitignored personal overlay)
+//  2. project-shared (.permcop.toml       — committed team policy)
+//  3. global-local   (~/.config/permcop/config.local.toml)
+//  4. global-shared  (~/.config/permcop/config.toml)
+//
+// Missing files are silently skipped. Parse errors are fatal.
+// DenySubshells is global-only: project layers cannot override it.
 func Load(cwd string) (*Config, error) {
-	global, err := loadFile(globalConfigPath, true)
+	globalShared, err := loadFile(globalConfigPath, true)
 	if err != nil {
 		return nil, fmt.Errorf("global config: %w", err)
 	}
+	globalLocal, err := loadFile(globalLocalConfigPath, true)
+	if err != nil {
+		return nil, fmt.Errorf("global local config: %w", err)
+	}
 
-	project, err := findAndLoadProject(cwd)
+	projectShared, projectLocal, err := findAndLoadProject(cwd)
 	if err != nil {
 		return nil, fmt.Errorf("project config: %w", err)
 	}
 
-	merged := merge(global, project)
+	merged := mergeAll(projectLocal, projectShared, globalLocal, globalShared)
+	// DenySubshells is global-only: project layers cannot disable it.
+	merged.Defaults.DenySubshells = globalShared.Defaults.DenySubshells || globalLocal.Defaults.DenySubshells
+
 	if err := applyDefaults(merged); err != nil {
 		return nil, err
 	}
@@ -127,69 +141,92 @@ func loadFile(relOrAbsPath string, missingOK bool) (*Config, error) {
 	return &cfg, nil
 }
 
-// findAndLoadProject walks from cwd up to home dir looking for .permcop.toml.
-// Walking stops at a git repository root (.git directory) to prevent a
-// .permcop.toml planted in a parent directory from weakening deny rules for
-// unrelated projects (confused-deputy / directory-traversal class of issue).
-func findAndLoadProject(cwd string) (*Config, error) {
+// findAndLoadProject walks from cwd upward (stopping at .git or home) looking
+// for .permcop.toml (shared) and .permcop.local.toml (local). Both files are
+// loaded from the first directory that contains either. Walking stops at the
+// git root to prevent a config planted in a parent directory from weakening
+// deny rules for projects inside the repo (confused-deputy/traversal issue).
+func findAndLoadProject(cwd string) (shared, local *Config, err error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	dir := cwd
 	for {
-		candidate := filepath.Join(dir, projectFileName)
-		if _, err := os.Stat(candidate); err == nil {
-			return loadFile(candidate, false)
+		sharedPath := filepath.Join(dir, projectFileName)
+		localPath := filepath.Join(dir, projectLocalFileName)
+		_, sharedMissing := os.Stat(sharedPath)
+		_, localMissing := os.Stat(localPath)
+
+		if sharedMissing == nil || localMissing == nil {
+			if sharedMissing == nil {
+				shared, err = loadFile(sharedPath, false)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			if localMissing == nil {
+				local, err = loadFile(localPath, false)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			return shared, local, nil
 		}
 
-		// Stop at the git repository root so that a .permcop.toml in a
-		// parent directory cannot override rules for projects inside this repo.
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			break
 		}
-
 		if dir == home || dir == filepath.Dir(dir) {
 			break
 		}
 		dir = filepath.Dir(dir)
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
-// merge combines a project config overlay with the global config.
-// Project rules are prepended; project defaults override global defaults where set.
-func merge(global *Config, project *Config) *Config {
+// mergeAll combines configs in priority order: first layer = highest priority.
+// Rules are appended in layer order (first layer's rules evaluated first).
+// Defaults take the first non-zero value scanning layers in order.
+// DenySubshells is intentionally excluded — Load sets it from global layers only.
+func mergeAll(layers ...*Config) *Config {
+	result := &Config{}
+	for _, layer := range layers {
+		if layer == nil {
+			continue
+		}
+		result.Rules = append(result.Rules, layer.Rules...)
+	}
+	for _, layer := range layers {
+		if layer == nil {
+			continue
+		}
+		if result.Defaults.LogFile == "" && layer.Defaults.LogFile != "" {
+			result.Defaults.LogFile = layer.Defaults.LogFile
+		}
+		if result.Defaults.LogFormat == "" && layer.Defaults.LogFormat != "" {
+			result.Defaults.LogFormat = layer.Defaults.LogFormat
+		}
+		if result.Defaults.UnknownVariableAction == "" && layer.Defaults.UnknownVariableAction != "" {
+			result.Defaults.UnknownVariableAction = layer.Defaults.UnknownVariableAction
+		}
+		if !result.Defaults.AllowSudo && layer.Defaults.AllowSudo {
+			result.Defaults.AllowSudo = true
+		}
+		if result.Defaults.SubshellDepthLimit == 0 && layer.Defaults.SubshellDepthLimit != 0 {
+			result.Defaults.SubshellDepthLimit = layer.Defaults.SubshellDepthLimit
+		}
+	}
+	return result
+}
+
+// merge is kept for backward compatibility with existing callers and tests.
+func merge(global, project *Config) *Config {
 	if project == nil {
 		return global
 	}
-
-	result := &Config{}
-
-	// Project rules first (higher priority in evaluation)
-	result.Rules = append(result.Rules, project.Rules...)
-	result.Rules = append(result.Rules, global.Rules...)
-
-	// Start with global defaults, project overrides where non-zero
-	result.Defaults = global.Defaults
-	if project.Defaults.LogFile != "" {
-		result.Defaults.LogFile = project.Defaults.LogFile
-	}
-	if project.Defaults.LogFormat != "" {
-		result.Defaults.LogFormat = project.Defaults.LogFormat
-	}
-	if project.Defaults.UnknownVariableAction != "" {
-		result.Defaults.UnknownVariableAction = project.Defaults.UnknownVariableAction
-	}
-	if project.Defaults.AllowSudo {
-		result.Defaults.AllowSudo = true
-	}
-	if project.Defaults.SubshellDepthLimit != 0 {
-		result.Defaults.SubshellDepthLimit = project.Defaults.SubshellDepthLimit
-	}
-
-	return result
+	return mergeAll(project, global)
 }
 
 func applyDefaults(cfg *Config) error {

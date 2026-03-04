@@ -27,33 +27,41 @@ Usage:
   permcop explain <cmd>                           Dry-run: show rule evaluation without logging or blocking
   permcop validate [file]                         Validate config (default: ~/.config/permcop/config.toml)
   permcop init [--global]                         Set up Claude Code hook and create config
-  permcop import-claude-settings [--global] [--dry-run] [file]
+  permcop import-claude-settings [--global] [--shared] [--dry-run] [file]
                                                   Import Claude Code permissions to permcop TOML
   permcop version                                 Print version
   permcop help                                    Show this help message
 
-Config files:
-  Global config:   ~/.config/permcop/config.toml
-  Per-project:     .permcop.toml  (searched upward from CWD to home)
-  Audit log:       ~/.local/share/permcop/audit.log
+Config files (merged in priority order, highest first):
+  .permcop.local.toml              project local  (gitignored; personal overlay)
+  .permcop.toml                    project shared (committed; team policy)
+  ~/.config/permcop/config.local.toml  global local
+  ~/.config/permcop/config.toml        global shared
+  Audit log: ~/.local/share/permcop/audit.log
 `
 
 const usageImportClaudeSettings = `permcop import-claude-settings — Convert Claude Code permissions to permcop TOML
 
 Usage:
-  permcop import-claude-settings [--global] [--dry-run] [sourcefile]
+  permcop import-claude-settings [--global] [--shared] [--dry-run] [sourcefile]
 
 Flags:
-  --global    Read from ~/.claude/settings.json; write to ~/.config/permcop/config.toml
+  --global    Use global config scope (~/.config/permcop/) instead of project
+  --shared    Write to the shared (committed) config instead of the local variant
   --dry-run   Print the generated TOML to stdout without writing anything
   --help      Show this help message
 
 Default behavior (no flags):
-  Source:  .claude/settings.json  (searched upward from CWD to git root)
+  Source:  .claude/settings.json + .claude/settings.local.json (merged, searched upward)
+  Dest:    .permcop.local.toml in CWD  (gitignored personal overlay)
+
+With --shared:
   Dest:    .permcop.toml in CWD
 
 With --global:
-  Source:  ~/.claude/settings.json
+  Dest:    ~/.config/permcop/config.local.toml
+
+With --global --shared:
   Dest:    ~/.config/permcop/config.toml
 
 If [sourcefile] is given, it overrides the default source path.
@@ -105,7 +113,7 @@ func main() {
 		global := len(os.Args) >= 3 && os.Args[2] == "--global"
 		runInit(global)
 	case "import-claude-settings":
-		var global, dryRun bool
+		var global, dryRun, shared bool
 		var sourcePath string
 		for _, arg := range os.Args[2:] {
 			switch arg {
@@ -113,6 +121,8 @@ func main() {
 				global = true
 			case "--dry-run":
 				dryRun = true
+			case "--shared":
+				shared = true
 			case "--help", "-h":
 				fmt.Fprint(os.Stdout, usageImportClaudeSettings)
 				os.Exit(0)
@@ -124,7 +134,7 @@ func main() {
 				sourcePath = arg
 			}
 		}
-		runImportClaudeSettings(global, dryRun, sourcePath)
+		runImportClaudeSettings(global, dryRun, shared, sourcePath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n\n%s", os.Args[1], usage)
 		os.Exit(1)
@@ -378,7 +388,7 @@ func runInit(global bool) {
 		os.Exit(1)
 	}
 
-	// 1. Determine config path
+	// 1. Determine config path (ask shared vs local)
 	var cfgPath string
 	if global {
 		cfgDir := filepath.Join(home, ".config", "permcop")
@@ -386,12 +396,26 @@ func runInit(global bool) {
 			fmt.Fprintf(os.Stderr, "create config dir: %v\n", err)
 			os.Exit(1)
 		}
-		cfgPath = filepath.Join(cfgDir, "config.toml")
+		fmt.Println("Create global config as:")
+		fmt.Printf("  [1] Shared (%s) — used in all sessions\n", filepath.Join(cfgDir, "config.toml"))
+		fmt.Printf("  [2] Local  (%s) — personal overlay\n", filepath.Join(cfgDir, "config.local.toml"))
+		if promptChoice("Choice [1/2] (default: 1): ", 2) == 2 {
+			cfgPath = filepath.Join(cfgDir, "config.local.toml")
+		} else {
+			cfgPath = filepath.Join(cfgDir, "config.toml")
+		}
 	} else {
 		if _, err := os.Stat(filepath.Join(cwd, ".git")); os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: no .git directory in %s; creating .permcop.toml here anyway\n", cwd)
+			fmt.Fprintf(os.Stderr, "warning: no .git directory in %s; creating config here anyway\n", cwd)
 		}
-		cfgPath = filepath.Join(cwd, ".permcop.toml")
+		fmt.Println("Create project config as:")
+		fmt.Printf("  [1] Shared (.permcop.toml)       — committed to repo; team policy\n")
+		fmt.Printf("  [2] Local  (.permcop.local.toml) — gitignored; personal overlay\n")
+		if promptChoice("Choice [1/2] (default: 1): ", 2) == 2 {
+			cfgPath = filepath.Join(cwd, ".permcop.local.toml")
+		} else {
+			cfgPath = filepath.Join(cwd, ".permcop.toml")
+		}
 	}
 
 	fmt.Printf("Config path: %s\n", cfgPath)
@@ -405,6 +429,11 @@ func runInit(global bool) {
 		fmt.Printf("Created starter config: %s\n", cfgPath)
 	} else {
 		fmt.Printf("Config already exists, skipping: %s\n", cfgPath)
+	}
+
+	// 2b. Offer to gitignore the local config file
+	if !global && strings.HasSuffix(cfgPath, ".permcop.local.toml") {
+		offerGitignore(cwd, ".permcop.local.toml")
 	}
 
 	// 3. Wire up the Claude Code hook. In project mode, write to
@@ -558,7 +587,10 @@ func addHookToSettings(path string) error {
 
 // runImportClaudeSettings converts Claude Code's settings.json permissions to
 // permcop TOML and writes them to the appropriate config file.
-func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
+// Default destination is the local config variant (.permcop.local.toml /
+// config.local.toml) since imported permissions are personal by nature.
+// Use --shared to write to the committed shared config instead.
+func runImportClaudeSettings(global, dryRun, shared bool, sourcePath string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
@@ -595,12 +627,18 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 		}
 	}
 
-	// Resolve dest path
+	// Resolve dest path. Default is the local variant since imported
+	// permissions are personal; use --shared for the committed shared config.
 	var destPath string
-	if global {
+	switch {
+	case global && shared:
 		destPath = filepath.Join(home, ".config", "permcop", "config.toml")
-	} else {
+	case global:
+		destPath = filepath.Join(home, ".config", "permcop", "config.local.toml")
+	case shared:
 		destPath = filepath.Join(cwd, ".permcop.toml")
+	default:
+		destPath = filepath.Join(cwd, ".permcop.local.toml")
 	}
 
 	result, err := importer.FromFiles(sourcePaths)
@@ -662,6 +700,11 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "Wrote %d rule(s) to %s\n", len(result.Rules), destPath)
+
+	// Offer to gitignore the local config if we wrote to a project-local file.
+	if !global && !shared {
+		offerGitignore(cwd, ".permcop.local.toml")
+	}
 }
 
 // findProjectClaudeSettings walks from cwd upward (stopping at .git or home)
@@ -692,6 +735,58 @@ func findProjectClaudeSettings(cwd string) []string {
 		dir = filepath.Dir(dir)
 	}
 	return nil
+}
+
+// promptChoice prints prompt and reads a number in [1..n]. Returns 1 on empty
+// input (default) or invalid input.
+func promptChoice(prompt string, n int) int {
+	fmt.Print(prompt)
+	var resp string
+	fmt.Scanln(&resp)
+	resp = strings.TrimSpace(resp)
+	if resp == "" {
+		return 1
+	}
+	for i := 1; i <= n; i++ {
+		if resp == fmt.Sprintf("%d", i) {
+			return i
+		}
+	}
+	return 1
+}
+
+// offerGitignore checks whether filename is already in CWD/.gitignore and, if
+// not and a .git directory exists, prompts the user to add it.
+func offerGitignore(cwd, filename string) {
+	if _, err := os.Stat(filepath.Join(cwd, ".git")); err != nil {
+		return // not a git repo
+	}
+	gitignorePath := filepath.Join(cwd, ".gitignore")
+	existing, _ := os.ReadFile(gitignorePath)
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == filename {
+			return // already present
+		}
+	}
+	fmt.Printf("Add %s to .gitignore? [Y/n] ", filename)
+	var resp string
+	fmt.Scanln(&resp)
+	if strings.ToLower(strings.TrimSpace(resp)) == "n" {
+		return
+	}
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not update .gitignore: %v\n", err)
+		return
+	}
+	defer f.Close()
+	entry := filename + "\n"
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		entry = "\n" + entry
+	}
+	if _, err := fmt.Fprint(f, entry); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write .gitignore: %v\n", err)
+	}
 }
 
 // confirmAppend prints the content to be appended with a + prefix per line,

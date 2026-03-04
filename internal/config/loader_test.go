@@ -162,8 +162,122 @@ func TestMerge_NilProject(t *testing.T) {
 
 	merged := merge(global, nil)
 
-	if merged != global {
-		t.Error("merge with nil project should return global unchanged")
+	// nil project: result should have the same rules as global
+	if len(merged.Rules) != 1 || merged.Rules[0].Name != "global only" {
+		t.Errorf("merge with nil project: got %v, want global rules unchanged", merged.Rules)
+	}
+}
+
+func TestMergeAll_FourLayerPriority(t *testing.T) {
+	t.Parallel()
+
+	projectLocal := &Config{Rules: []Rule{{Name: "pl"}}, Defaults: Defaults{LogFormat: "json"}}
+	projectShared := &Config{Rules: []Rule{{Name: "ps"}}, Defaults: Defaults{LogFormat: "text", SubshellDepthLimit: 5}}
+	globalLocal := &Config{Rules: []Rule{{Name: "gl"}}}
+	globalShared := &Config{Rules: []Rule{{Name: "gs"}}}
+
+	merged := mergeAll(projectLocal, projectShared, globalLocal, globalShared)
+
+	// Rules in layer order: pl, ps, gl, gs
+	wantOrder := []string{"pl", "ps", "gl", "gs"}
+	if len(merged.Rules) != len(wantOrder) {
+		t.Fatalf("rule count: got %d, want %d", len(merged.Rules), len(wantOrder))
+	}
+	for i, name := range wantOrder {
+		if merged.Rules[i].Name != name {
+			t.Errorf("rule[%d]: got %q, want %q", i, merged.Rules[i].Name, name)
+		}
+	}
+
+	// LogFormat: projectLocal wins (json)
+	if merged.Defaults.LogFormat != "json" {
+		t.Errorf("LogFormat: got %q, want %q", merged.Defaults.LogFormat, "json")
+	}
+	// SubshellDepthLimit: projectLocal has zero, projectShared has 5 → 5 wins
+	if merged.Defaults.SubshellDepthLimit != 5 {
+		t.Errorf("SubshellDepthLimit: got %d, want 5", merged.Defaults.SubshellDepthLimit)
+	}
+}
+
+func TestMergeAll_NilLayersSkipped(t *testing.T) {
+	t.Parallel()
+
+	a := &Config{Rules: []Rule{{Name: "a"}}}
+	merged := mergeAll(nil, a, nil)
+	if len(merged.Rules) != 1 || merged.Rules[0].Name != "a" {
+		t.Errorf("expected single rule 'a', got %v", merged.Rules)
+	}
+}
+
+func TestFindAndLoadProject_LoadsBothVariants(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gitDir := filepath.Join(root, ".git")
+	subdir := filepath.Join(root, "subdir")
+	for _, d := range []string{gitDir, subdir} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(t, root, projectFileName, "[[rules]]\nname = \"shared\"")
+	writeConfig(t, root, projectLocalFileName, "[[rules]]\nname = \"local\"")
+
+	shared, local, err := findAndLoadProject(subdir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if shared == nil || len(shared.Rules) == 0 || shared.Rules[0].Name != "shared" {
+		t.Errorf("shared config not loaded correctly: %v", shared)
+	}
+	if local == nil || len(local.Rules) == 0 || local.Rules[0].Name != "local" {
+		t.Errorf("local config not loaded correctly: %v", local)
+	}
+}
+
+func TestFindAndLoadProject_OnlyLocalExists(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, root, projectLocalFileName, "[[rules]]\nname = \"local only\"")
+
+	shared, local, err := findAndLoadProject(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if shared != nil {
+		t.Errorf("expected nil shared config, got rules: %v", shared.Rules)
+	}
+	if local == nil || len(local.Rules) == 0 || local.Rules[0].Name != "local only" {
+		t.Errorf("local config not loaded correctly: %v", local)
+	}
+}
+
+func TestFindAndLoadProject_StopsAtGitRootBothFiles(t *testing.T) {
+	t.Parallel()
+
+	// Both .permcop.toml and .permcop.local.toml above the git boundary
+	// must not be loaded.
+	root := t.TempDir()
+	gitRoot := filepath.Join(root, "repo")
+	subdir := filepath.Join(gitRoot, "subdir")
+	for _, d := range []string{filepath.Join(gitRoot, ".git"), subdir} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(t, root, projectFileName, "[[rules]]\nname = \"above git\"")
+	writeConfig(t, root, projectLocalFileName, "[[rules]]\nname = \"above git local\"")
+
+	shared, local, err := findAndLoadProject(subdir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if shared != nil || local != nil {
+		t.Errorf("expected nil configs (traversal stops at git root), got shared=%v local=%v", shared, local)
 	}
 }
 
@@ -252,12 +366,12 @@ func TestFindAndLoadProject_StopsAtGitRoot(t *testing.T) {
 	// .permcop.toml in root (above the git boundary) — must NOT be loaded.
 	writeConfig(t, root, projectFileName, `[[rules]]`+"\n"+"name = \"above git root\"")
 
-	cfg, err := findAndLoadProject(subdir)
+	shared, local, err := findAndLoadProject(subdir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg != nil {
-		t.Errorf("expected nil config (traversal should stop at git root), got rules: %v", cfg.Rules)
+	if shared != nil || local != nil {
+		t.Errorf("expected nil configs (traversal should stop at git root), got shared=%v local=%v", shared, local)
 	}
 }
 
@@ -278,12 +392,15 @@ func TestFindAndLoadProject_LoadsConfigAtGitRoot(t *testing.T) {
 	}
 	writeConfig(t, root, projectFileName, "[[rules]]\nname = \"at git root\"")
 
-	cfg, err := findAndLoadProject(subdir)
+	shared, local, err := findAndLoadProject(subdir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg == nil || len(cfg.Rules) == 0 || cfg.Rules[0].Name != "at git root" {
-		t.Errorf("expected config at git root to be loaded, got: %v", cfg)
+	if shared == nil || len(shared.Rules) == 0 || shared.Rules[0].Name != "at git root" {
+		t.Errorf("expected shared config at git root to be loaded, got: %v", shared)
+	}
+	if local != nil {
+		t.Errorf("expected nil local config, got: %v", local)
 	}
 }
 
@@ -304,12 +421,15 @@ func TestFindAndLoadProject_LoadsConfigBelowGitRoot(t *testing.T) {
 	}
 	writeConfig(t, subdir, projectFileName, "[[rules]]\nname = \"within repo\"")
 
-	cfg, err := findAndLoadProject(deep)
+	shared, local, err := findAndLoadProject(deep)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg == nil || len(cfg.Rules) == 0 || cfg.Rules[0].Name != "within repo" {
-		t.Errorf("expected config within repo to be loaded, got: %v", cfg)
+	if shared == nil || len(shared.Rules) == 0 || shared.Rules[0].Name != "within repo" {
+		t.Errorf("expected shared config within repo to be loaded, got: %v", shared)
+	}
+	if local != nil {
+		t.Errorf("expected nil local config, got: %v", local)
 	}
 }
 

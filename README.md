@@ -25,7 +25,16 @@ permcop init
 
 ## Config
 
-Config lives at `~/.config/permcop/config.toml` (global) and optionally `.permcop.toml` in a project directory (project rules are evaluated first).
+Config is layered across up to four files, merged in priority order:
+
+| File | Scope | Commit? |
+|------|-------|---------|
+| `.permcop.local.toml` | project local | no — gitignore it |
+| `.permcop.toml` | project shared | yes — team policy |
+| `~/.config/permcop/config.local.toml` | global local | n/a |
+| `~/.config/permcop/config.toml` | global shared | n/a |
+
+All files are optional. Project files are searched upward from CWD, stopping at the git root. Rules from higher-priority files are evaluated first.
 
 ```toml
 [defaults]
@@ -220,13 +229,17 @@ Hit unit: git push origin main
 
 ### import-claude-settings
 
-Converts existing Claude Code permission rules (`~/.claude/settings.json`) to permcop TOML:
+Converts existing Claude Code permission rules to permcop TOML. Both `settings.json` and `settings.local.json` are merged as sources:
 
 ```bash
-permcop import-claude-settings >> ~/.config/permcop/config.toml
+permcop import-claude-settings           # → .permcop.local.toml (default: personal overlay)
+permcop import-claude-settings --shared  # → .permcop.toml (committed team policy)
+permcop import-claude-settings --global  # → ~/.config/permcop/config.local.toml
 ```
 
 Bash rules map to command `allow`/`deny` patterns. `Read`/`Edit` rules map to `allow_read`/`deny_read`/`allow_write`/`deny_write`. `ask` rules and non-file tools (WebFetch, MCP) are reported as warnings/skipped.
+
+The default destination is the local config variant because Claude Code permissions are typically personal — they accumulate per-machine and shouldn't be committed as team policy. Use `--shared` if you're deliberately setting project-wide rules.
 
 ## Audit log
 

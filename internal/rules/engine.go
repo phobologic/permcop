@@ -368,11 +368,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				Action: "deny",
 			})
 			entry.RuleMatches = allowMatches
-			r, err := deny("no matching allow rule", "", "", orig)
-			if r != nil {
-				r.FallThrough = true
-			}
-			return r, err
+			return &Result{Entry: entry, FallThrough: true}, nil
 		}
 	}
 
@@ -459,11 +455,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 		Unit:   unit.Value,
 		Action: "deny",
 	}}
-	r, err := deny("no matching allow rule", "", "")
-	if r != nil {
-		r.FallThrough = true
-	}
-	return r, err
+	return &Result{Entry: entry, FallThrough: true}, nil
 }
 
 // --- Matching helpers ---

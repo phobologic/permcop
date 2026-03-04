@@ -22,19 +22,22 @@ type Result struct {
 
 // Engine evaluates commands against a config.
 type Engine struct {
-	cfg    *config.Config
-	logger *audit.Logger
-	env    map[string]string // variable environment for expand_variables; nil = use os.Environ()
+	cfg     *config.Config
+	logger  *audit.Logger
+	env     map[string]string // variable environment for expand_variables; nil = use os.Environ()
+	homeDir string            // resolved once at construction for ~/ expansion in file patterns
 }
 
 // New creates an Engine using the process environment for variable expansion.
 func New(cfg *config.Config, logger *audit.Logger) *Engine {
-	return &Engine{cfg: cfg, logger: logger, env: osEnvMap()}
+	homeDir, _ := os.UserHomeDir()
+	return &Engine{cfg: cfg, logger: logger, env: osEnvMap(), homeDir: homeDir}
 }
 
 // NewWithEnv creates an Engine with an explicit environment map, primarily for testing.
 func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string) *Engine {
-	return &Engine{cfg: cfg, logger: logger, env: env}
+	homeDir, _ := os.UserHomeDir()
+	return &Engine{cfg: cfg, logger: logger, env: env, homeDir: homeDir}
 }
 
 // osEnvMap converts os.Environ() into a map for fast lookup.
@@ -121,7 +124,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				u.Value = expanded
 				u.HasVariable = false
 			}
-			if matched, patStr := matchesDenyPattern(r, &u); matched {
+			if matched, patStr := matchesDenyPattern(r, &u, e.homeDir); matched {
 				return deny("matched deny pattern", r.Name, patStr, &u)
 			}
 		}
@@ -164,7 +167,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				continue
 			}
 
-			if ok, pat := unitCoveredByRule(e.cfg, r, u); ok {
+			if ok, pat := unitCoveredByRule(e.cfg, r, u, e.homeDir); ok {
 				lastUnit = orig
 				lastPat = pat
 				lastRule = r.Name
@@ -224,7 +227,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 	// Pass 1: Deny scan
 	for i := range e.cfg.Rules {
 		r := &e.cfg.Rules[i]
-		if matched, patStr := matchesDenyPattern(r, &unit); matched {
+		if matched, patStr := matchesDenyPattern(r, &unit, e.homeDir); matched {
 			return deny("matched deny pattern", r.Name, patStr)
 		}
 	}
@@ -232,7 +235,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 	// Pass 2: Allow scan (file-only rules can cover a single file unit)
 	for i := range e.cfg.Rules {
 		r := &e.cfg.Rules[i]
-		if covered, pat := unitCoveredByRule(e.cfg, r, unit); covered {
+		if covered, pat := unitCoveredByRule(e.cfg, r, unit, e.homeDir); covered {
 			return allow(r.Name, pat)
 		}
 	}
@@ -242,7 +245,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 
 // --- Matching helpers ---
 
-func matchesDenyPattern(r *config.Rule, u *parser.CheckableUnit) (bool, string) {
+func matchesDenyPattern(r *config.Rule, u *parser.CheckableUnit, homeDir string) (bool, string) {
 	switch u.Kind {
 	case parser.UnitCommand:
 		for _, p := range r.Deny {
@@ -252,13 +255,13 @@ func matchesDenyPattern(r *config.Rule, u *parser.CheckableUnit) (bool, string) 
 		}
 	case parser.UnitReadFile:
 		for _, pat := range r.DenyRead {
-			if matchGlobPath(pat, u.Value) {
+			if matchGlobPath(pat, u.Value, homeDir) {
 				return true, "deny_read:" + pat
 			}
 		}
 	case parser.UnitWriteFile:
 		for _, pat := range r.DenyWrite {
-			if matchGlobPath(pat, u.Value) {
+			if matchGlobPath(pat, u.Value, homeDir) {
 				return true, "deny_write:" + pat
 			}
 		}
@@ -266,8 +269,7 @@ func matchesDenyPattern(r *config.Rule, u *parser.CheckableUnit) (bool, string) 
 	return false, ""
 }
 
-
-func unitCoveredByRule(_ *config.Config, r *config.Rule, u parser.CheckableUnit) (bool, string) {
+func unitCoveredByRule(_ *config.Config, r *config.Rule, u parser.CheckableUnit, homeDir string) (bool, string) {
 	switch u.Kind {
 	case parser.UnitCommand:
 		for _, p := range r.Allow {
@@ -277,13 +279,13 @@ func unitCoveredByRule(_ *config.Config, r *config.Rule, u parser.CheckableUnit)
 		}
 	case parser.UnitReadFile:
 		for _, pat := range r.AllowRead {
-			if matchGlobPath(pat, u.Value) {
+			if matchGlobPath(pat, u.Value, homeDir) {
 				return true, "allow_read:" + pat
 			}
 		}
 	case parser.UnitWriteFile:
 		for _, pat := range r.AllowWrite {
-			if matchGlobPath(pat, u.Value) {
+			if matchGlobPath(pat, u.Value, homeDir) {
 				return true, "allow_write:" + pat
 			}
 		}
@@ -313,12 +315,14 @@ func matchPattern(p config.Pattern, value string) bool {
 	return false
 }
 
-func matchGlobPath(pattern, path string) bool {
-	// Resolve glob relative to home if it starts with ~/
+func matchGlobPath(pattern, path, homeDir string) bool {
 	if strings.HasPrefix(pattern, "~/") {
-		// Leave as-is; gobwas/glob handles literal ~
+		if homeDir == "" {
+			return false
+		}
+		// Replace ~ with homeDir; pattern[1:] starts with /, so homeDir + pattern[1:] is correct.
+		pattern = homeDir + pattern[1:]
 	}
-	// Use ** for recursive matching
 	g, err := glob.Compile(pattern, filepath.Separator)
 	if err != nil {
 		return false

@@ -231,3 +231,19 @@ allow = ["git status"]
 		t.Error("expected ExpandVariables=false by default, got true")
 	}
 }
+
+func TestPatternUnmarshal_UnknownType(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "bad pattern type"
+allow = [{type="prefx", pattern="git status"}]
+`)
+
+	_, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err == nil {
+		t.Error("expected error for unknown pattern type, got nil")
+	}
+}

@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 // PatternType defines how a pattern string is interpreted.
 type PatternType string
 
@@ -49,6 +51,12 @@ func (p *Pattern) UnmarshalTOML(data interface{}) error {
 	}
 	if p.Type == "" {
 		p.Type = PatternGlob
+	}
+	switch p.Type {
+	case PatternExact, PatternPrefix, PatternGlob, PatternRegex:
+		// valid
+	default:
+		return fmt.Errorf("unknown pattern type %q: must be one of exact, prefix, glob, regex", p.Type)
 	}
 	return nil
 }

@@ -116,6 +116,40 @@ func TestCheckFile_EmptyPath(t *testing.T) {
 	}
 }
 
+func TestEngine_TildeExpansion(t *testing.T) {
+	t.Parallel()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("os.UserHomeDir() unavailable:", err)
+	}
+
+	e := newTestEngine(t, []config.Rule{
+		{
+			Name:     "deny ssh keys",
+			DenyRead: []string{"~/.ssh/**"},
+		},
+	}, nil)
+
+	// A path inside ~/.ssh should be denied.
+	sshKey := homeDir + "/.ssh/id_rsa"
+	r, _ := e.CheckFile(sshKey, parser.UnitReadFile)
+	if r.Allowed {
+		t.Errorf("expected DENY for %s with deny_read=[~/.ssh/**], got ALLOW", sshKey)
+	}
+
+	// An unrelated path should not be denied (falls through to default deny, but not by this rule).
+	other := homeDir + "/Documents/notes.txt"
+	r2, _ := e.CheckFile(other, parser.UnitReadFile)
+	if r2.Allowed {
+		t.Error("expected DENY for unrelated path (no allow rule), got ALLOW")
+	}
+	if r2.DecidingRule != "" {
+		// The deny came from "no matching allow rule", not from our deny_read rule.
+		t.Logf("deciding rule for unrelated path: %q (reason: %s)", r2.DecidingRule, r2.Reason)
+	}
+}
+
 func TestCheckFile_AuditLog(t *testing.T) {
 	t.Parallel()
 

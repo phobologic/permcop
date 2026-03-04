@@ -76,6 +76,16 @@ allow_write = ["/tmp/build/**"]
 
 Bare strings default to `glob`. Pattern types apply to command strings; file paths always use glob.
 
+An unknown `type` value (e.g. a typo like `"prefx"`) is rejected at config load time with a clear error — it will not silently create a non-matching rule.
+
+File path patterns (`allow_read`, `deny_read`, `allow_write`, `deny_write`) support `~/` as a prefix, which is expanded to the user's home directory at engine startup:
+
+```toml
+[[rules]]
+name = "Protect SSH keys"
+deny_read = ["~/.ssh/**"]
+```
+
 ### Variable and subshell handling
 
 Commands containing `$VAR` or `$(...)` present an evaluation challenge because permcop can't know the runtime value at check time. Two mechanisms address this:

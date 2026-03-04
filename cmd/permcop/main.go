@@ -1179,47 +1179,59 @@ func checkboxSelect(labels []string) ([]int, error) {
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState) //nolint:errcheck
 
+	// Truncate labels to terminal width to prevent line-wrapping, which would
+	// break the cursor-up math used to redraw in place.
+	width, _, err := term.GetSize(int(os.Stdin.Fd()))
+	if err != nil || width <= 0 {
+		width = 80
+	}
+	const prefix = "  [ ] " // 6 chars
+	maxLabel := width - len(prefix)
+	if maxLabel < 10 {
+		maxLabel = 10
+	}
+	display := make([]string, len(labels))
+	for i, lbl := range labels {
+		if len(lbl) > maxLabel {
+			display[i] = lbl[:maxLabel-1] + "…"
+		} else {
+			display[i] = lbl
+		}
+	}
+
 	checked := make([]bool, len(labels))
 	cursor := 0
 
-	// header + items + blank + footer
-	totalLines := 2 + len(labels) + 2
+	// totalLines: header + blank + items + blank + footer (no trailing newline on footer)
+	totalLines := len(labels) + 4
 
-	// Draw returns the full block of lines, always re-rendering from the top.
+	first := true
 	render := func() {
-		// Move cursor up totalLines (except on first paint).
-		fmt.Print("\r\033[K") // clear current line
-		// Go up to where we started.
-		if totalLines > 1 {
-			fmt.Printf("\033[%dA", totalLines-1)
+		if !first {
+			// Return to the start of the header line.
+			fmt.Printf("\033[%dA\r", totalLines-1)
 		}
-		fmt.Print("Commands deferred to Claude Code (no permcop rule matched):\r\n")
-		fmt.Print("\r\n")
-		for i, lbl := range labels {
+		first = false
+
+		fmt.Printf("\033[KCommands deferred to Claude Code (no permcop rule matched):\r\n")
+		fmt.Print("\033[K\r\n")
+		for i, lbl := range display {
 			mark := " "
 			if checked[i] {
 				mark = "x"
 			}
 			line := fmt.Sprintf("  [%s] %s", mark, lbl)
+			fmt.Print("\033[K")
 			if i == cursor {
-				// Bold + reverse video for the active row.
 				fmt.Printf("\033[1;7m%s\033[0m\r\n", line)
 			} else {
 				fmt.Printf("%s\r\n", line)
 			}
 		}
-		fmt.Print("\r\n")
-		fmt.Print("  \033[2m<Space> toggle  <a> all  <Enter> confirm  <q> quit\033[0m\r\n")
+		fmt.Print("\033[K\r\n")
+		// Footer: no trailing \r\n so cursor stays on this line for next move-up.
+		fmt.Print("\033[K  \033[2m<Space> toggle  <a> all  <Enter> confirm  <q> quit\033[0m")
 	}
-
-	// Initial paint — just print the block (cursor is already at the right place).
-	fmt.Print("Commands deferred to Claude Code (no permcop rule matched):\r\n")
-	fmt.Print("\r\n")
-	for _, lbl := range labels {
-		fmt.Printf("  [ ] %s\r\n", lbl)
-	}
-	fmt.Print("\r\n")
-	fmt.Print("  \033[2m<Space> toggle  <a> all  <Enter> confirm  <q> quit\033[0m\r\n")
 
 	buf := make([]byte, 16)
 	for {
@@ -1248,12 +1260,12 @@ func checkboxSelect(labels []string) ([]int, error) {
 		case len(b) == 1 && b[0] == ' ':
 			checked[cursor] = !checked[cursor]
 
-		case len(b) == 1 && (b[0] == 'k'):
+		case len(b) == 1 && b[0] == 'k':
 			if cursor > 0 {
 				cursor--
 			}
 
-		case len(b) == 1 && (b[0] == 'j'):
+		case len(b) == 1 && b[0] == 'j':
 			if cursor < len(labels)-1 {
 				cursor++
 			}

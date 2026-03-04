@@ -361,12 +361,20 @@ func runValidate(path string) {
 }
 
 // runInit sets up the Claude Code hook and creates a starter config.
-// If global is true, write to ~/.config/permcop/config.toml; otherwise write
-// .permcop.toml in the current working directory.
+// If global is true, write to ~/.config/permcop/config.toml and register the
+// hook in ~/.claude/settings.json; otherwise write .permcop.toml in the
+// current working directory and register the hook in .claude/settings.local.json
+// (gitignored, machine-local).
 func runInit(global bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "working directory: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -380,11 +388,6 @@ func runInit(global bool) {
 		}
 		cfgPath = filepath.Join(cfgDir, "config.toml")
 	} else {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "working directory: %v\n", err)
-			os.Exit(1)
-		}
 		if _, err := os.Stat(filepath.Join(cwd, ".git")); os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "warning: no .git directory in %s; creating .permcop.toml here anyway\n", cwd)
 		}
@@ -404,13 +407,25 @@ func runInit(global bool) {
 		fmt.Printf("Config already exists, skipping: %s\n", cfgPath)
 	}
 
-	// 3. Wire up the Claude Code hook in the user's global settings
-	claudeSettingsDir := filepath.Join(home, ".claude")
-	claudeSettingsPath := filepath.Join(claudeSettingsDir, "settings.json")
-
-	if err := os.MkdirAll(claudeSettingsDir, 0700); err != nil {
-		fmt.Fprintf(os.Stderr, "create .claude dir: %v\n", err)
-		os.Exit(1)
+	// 3. Wire up the Claude Code hook. In project mode, write to
+	// .claude/settings.local.json (gitignored) so the hook is machine-local
+	// and doesn't affect other projects. In global mode, write to
+	// ~/.claude/settings.json so the hook applies to all sessions.
+	var claudeSettingsPath string
+	if global {
+		claudeSettingsDir := filepath.Join(home, ".claude")
+		if err := os.MkdirAll(claudeSettingsDir, 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "create .claude dir: %v\n", err)
+			os.Exit(1)
+		}
+		claudeSettingsPath = filepath.Join(claudeSettingsDir, "settings.json")
+	} else {
+		claudeDir := filepath.Join(cwd, ".claude")
+		if err := os.MkdirAll(claudeDir, 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "create .claude dir: %v\n", err)
+			os.Exit(1)
+		}
+		claudeSettingsPath = filepath.Join(claudeDir, "settings.local.json")
 	}
 
 	if err := addHookToSettings(claudeSettingsPath); err != nil {

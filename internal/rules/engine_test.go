@@ -194,9 +194,23 @@ func TestEngine_SudoBlocked(t *testing.T) {
 		},
 	}, &config.Defaults{AllowSudo: false})
 
-	r, _ := e.Check("sudo rm -rf /", "/tmp")
-	if r.Allowed {
-		t.Error("expected DENY for sudo, got ALLOW")
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"direct sudo", "sudo rm -rf /"},
+		{"sudo in chain", "echo hello && sudo rm -rf /"},
+		{"sudo after pipe", "cat /etc/passwd | sudo tee /etc/shadow"},
+		{"sudo after semicolon", "ls; sudo reboot"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r, _ := e.Check(tt.command, "/tmp")
+			if r.Allowed {
+				t.Errorf("expected DENY for %q, got ALLOW", tt.command)
+			}
+		})
 	}
 }
 

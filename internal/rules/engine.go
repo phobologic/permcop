@@ -93,11 +93,6 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 
 	// Config availability is checked by the caller; if we got here, config is valid.
 
-	// sudo check
-	if !e.cfg.Defaults.AllowSudo && hasSudo(command) {
-		return deny("sudo not permitted", "", "", nil)
-	}
-
 	// Parse the command
 	parsed := parser.Parse(command, cwd, e.cfg.Defaults.SubshellDepthLimit)
 	if parsed.ParseError != nil {
@@ -107,6 +102,16 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 
 	if len(parsed.Units) == 0 {
 		return deny("empty command", "", "", nil)
+	}
+
+	// sudo check — runs after parsing so chained commands (e.g. "echo hi && sudo rm -rf /")
+	// are correctly detected via their individual AST units rather than a raw prefix check.
+	if !e.cfg.Defaults.AllowSudo {
+		for i := range parsed.Units {
+			if u := &parsed.Units[i]; u.Kind == parser.UnitCommand && unitHasSudo(u.Value) {
+				return deny("sudo not permitted", "", "", u)
+			}
+		}
 	}
 
 	// --- Pass 1: Deny scan (all rules × all units) ---
@@ -361,10 +366,12 @@ func expandVars(s string, env map[string]string) (string, bool) {
 	return result, true
 }
 
-func hasSudo(command string) bool {
-	// Quick prefix check — the parser will catch more complex cases,
-	// but this handles the common "sudo <cmd>" case before parsing.
-	trimmed := strings.TrimSpace(command)
+// unitHasSudo reports whether a single parsed command unit invokes sudo.
+// The value is the AST-reconstructed command string for one unit (e.g. "sudo git status"),
+// so a simple prefix check here is correct — the AST has already handled quoting, chaining,
+// and other shell syntax.
+func unitHasSudo(value string) bool {
+	trimmed := strings.TrimSpace(value)
 	return trimmed == "sudo" ||
 		strings.HasPrefix(trimmed, "sudo ") ||
 		strings.HasPrefix(trimmed, "sudo\t")

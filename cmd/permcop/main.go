@@ -458,9 +458,12 @@ func addHookToSettings(path string) error {
 		settings = make(map[string]interface{})
 	}
 
-	// Tools that permcop governs. Each gets its own matcher entry.
-	// permcop check reads tool_name from the hook JSON and routes internally.
-	toolMatchers := []string{"Bash", "Read", "Write", "Edit", "MultiEdit"}
+	// Only hook Bash by default. Claude Code's own permission system already
+	// gates Read/Write/Edit/MultiEdit; adding permcop on top of those tools
+	// creates deny-by-default friction for internal operations (plans, memory,
+	// config edits) with little security benefit. Users who want file-tool
+	// coverage can add the extra matchers manually.
+	toolMatchers := []string{"Bash"}
 	permcopHook := map[string]interface{}{
 		"type":    "command",
 		"command": "permcop check",

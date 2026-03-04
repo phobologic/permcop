@@ -4,7 +4,7 @@ A rule-based permission enforcer for [Claude Code](https://claude.ai/code). Inte
 
 ## How it works
 
-permcop integrates as a Claude Code hook. Before Claude runs any Bash command or accesses any file, the hook invokes `permcop check`, which:
+permcop integrates as a Claude Code hook. Before Claude runs any Bash command, the hook invokes `permcop check`, which:
 
 1. Parses the command into constituent units (chained commands, subshells, redirects)
 2. Runs a **two-pass evaluation** against your config:
@@ -21,7 +21,7 @@ go install github.com/mikecafarella/permcop/cmd/permcop@latest
 permcop init
 ```
 
-`permcop init` creates a starter config at `~/.config/permcop/config.toml` and wires the hook into `~/.claude/settings.json`.
+`permcop init` creates a starter config at `.permcop.toml` in the current directory and wires the hook into `.claude/settings.local.json` (project-scoped, gitignored). Use `--global` to install machine-wide instead.
 
 ## Config
 
@@ -142,7 +142,7 @@ allow      = [{ type = "prefix", pattern = "echo" }]
 deny_write = ["/tmp/secrets/**"]
 ```
 
-The same `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply uniformly to both contexts: shell redirections inside Bash commands, and direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls.
+The `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply to file units produced by shell redirections inside Bash commands (e.g. `echo hi > /tmp/out.txt` produces a write unit for `/tmp/out.txt`). They do not apply to direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls unless you explicitly add those matchers to the hook (see [Hook wiring](#hook-wiring)).
 
 > **Design note — `allow_write` is a zone capability, not a per-command constraint**
 >
@@ -179,16 +179,19 @@ The same `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply unif
 
 ## Tools governed
 
-permcop evaluates:
+permcop is designed for **Bash**. That's where the real attack surface is: shell command parsing, chained commands, subshells, and redirects.
 
-| Claude Code tool | What's checked |
-|------------------|----------------|
-| `Bash` | Full command parsed into units (chains, pipes, subshells, redirects) |
-| `Read` | File path against `allow_read` / `deny_read` |
-| `Write` | File path against `allow_write` / `deny_write` |
-| `Edit` | File path against `allow_write` / `deny_write` |
-| `MultiEdit` | File path against `allow_write` / `deny_write` |
-| Everything else | Allowed through (permcop only governs what it knows about) |
+| Claude Code tool | Default | What's checked |
+|------------------|---------|----------------|
+| `Bash` | Hooked | Full command parsed into units (chains, pipes, subshells, redirects) |
+| `Read` / `Write` / `Edit` / `MultiEdit` | Not hooked | File path against `allow_read`/`deny_read`/`allow_write`/`deny_write` (if hooked manually) |
+| Everything else | Allowed through | permcop only governs what it knows about |
+
+**Why not hook file tools by default?**
+
+Claude Code already gates file operations through its own permission system (approval dialogs, `autoApprove` settings). Adding permcop's deny-by-default on top creates friction for Claude's internal operations — writing plan files, updating memory, editing config — with little security benefit. If something slips past Claude Code's file permission system, the blast radius is far smaller than an unchecked shell command anyway.
+
+If you do want to gate file tool calls, add the matchers manually to your Claude settings (see [Hook wiring](#hook-wiring)). Be aware you will need explicit `allow_read`/`allow_write` rules covering Claude's internal paths (`~/.claude/**`) or those operations will be silently denied.
 
 ## Commands
 
@@ -246,21 +249,19 @@ Every decision is logged to `~/.local/share/permcop/audit.log` (configurable).
 
 ## Hook wiring
 
-`permcop init` adds entries like this to `~/.claude/settings.json`:
+`permcop init` adds this entry to `.claude/settings.local.json` in the project directory:
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
-      {"matcher": "Bash",      "hooks": [{"type": "command", "command": "permcop check"}]},
-      {"matcher": "Read",      "hooks": [{"type": "command", "command": "permcop check"}]},
-      {"matcher": "Write",     "hooks": [{"type": "command", "command": "permcop check"}]},
-      {"matcher": "Edit",      "hooks": [{"type": "command", "command": "permcop check"}]},
-      {"matcher": "MultiEdit", "hooks": [{"type": "command", "command": "permcop check"}]}
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "permcop check"}]}
     ]
   }
 }
 ```
+
+Only `Bash` is hooked by default. If you want to gate file tools as well, add the extra matchers manually — but read the caveat in [Tools governed](#tools-governed) first.
 
 ## License
 

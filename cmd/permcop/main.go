@@ -596,8 +596,9 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 	}
 
 	content := fmt.Sprintf("# Imported from: %s\n", sourcePath) +
-		"# NOTE: permcop requires a single rule to cover ALL units of a command\n" +
-		"# (command + any redirects). Review and adjust before using.\n\n" +
+		"# NOTE: each unit in a command (subcommands, redirects) must be covered\n" +
+		"# by at least one rule, but different units can match different rules.\n" +
+		"# Review and adjust before using.\n\n" +
 		importer.RulesToTOML(result.Rules)
 
 	if dryRun {

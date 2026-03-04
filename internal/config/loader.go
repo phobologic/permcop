@@ -54,7 +54,9 @@ func Load(cwd string) (*Config, error) {
 	}
 
 	merged := merge(global, project)
-	applyDefaults(merged)
+	if err := applyDefaults(merged); err != nil {
+		return nil, err
+	}
 	warnBroadAllowRules(merged)
 	return merged, nil
 }
@@ -65,7 +67,9 @@ func LoadFile(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	applyDefaults(cfg)
+	if err := applyDefaults(cfg); err != nil {
+		return nil, err
+	}
 	warnBroadAllowRules(cfg)
 	return cfg, nil
 }
@@ -160,7 +164,7 @@ func merge(global *Config, project *Config) *Config {
 	return result
 }
 
-func applyDefaults(cfg *Config) {
+func applyDefaults(cfg *Config) error {
 	if cfg.Defaults.LogFormat == "" {
 		cfg.Defaults.LogFormat = "text"
 	}
@@ -171,7 +175,11 @@ func applyDefaults(cfg *Config) {
 		cfg.Defaults.SubshellDepthLimit = 3
 	}
 	if cfg.Defaults.LogFile == "" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("home directory: %w", err)
+		}
 		cfg.Defaults.LogFile = filepath.Join(home, ".local", "share", "permcop", "audit.log")
 	}
+	return nil
 }

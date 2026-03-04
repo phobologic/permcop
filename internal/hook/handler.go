@@ -64,12 +64,22 @@ func (e *ParseError) Error() string {
 
 func (e *ParseError) Unwrap() error { return e.Cause }
 
+const maxHookInputSize = 1 << 20 // 1 MiB
+
 // ReadInput decodes the hook JSON from r and returns a ParsedInput.
 // On failure it returns a *ParseError containing the raw bytes received.
+// Inputs larger than maxHookInputSize are rejected to prevent memory exhaustion.
 func ReadInput(r io.Reader) (*ParsedInput, error) {
-	raw, err := io.ReadAll(r)
+	lr := io.LimitReader(r, maxHookInputSize+1)
+	raw, err := io.ReadAll(lr)
 	if err != nil {
 		return nil, &ParseError{Cause: fmt.Errorf("read stdin: %w", err), RawInput: raw}
+	}
+	if int64(len(raw)) > maxHookInputSize {
+		return nil, &ParseError{
+			Cause:    fmt.Errorf("input exceeds %d bytes", maxHookInputSize),
+			RawInput: raw[:maxHookInputSize],
+		}
 	}
 
 	var envelope Input

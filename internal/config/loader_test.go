@@ -479,6 +479,27 @@ allow = ["*"]
 	}
 }
 
+func TestApplyDefaults_HomeDirError(t *testing.T) {
+	// Simulate os.UserHomeDir() failure by unsetting HOME (and related vars).
+	// This test cannot be parallel because it mutates environment variables.
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "") // Windows fallback
+
+	cfg := &Config{}
+	err := applyDefaults(cfg)
+	if err == nil {
+		// UserHomeDir may succeed via other means on some platforms;
+		// if it does, the default log path should still be populated.
+		if cfg.Defaults.LogFile == "" {
+			t.Error("LogFile should be set when UserHomeDir succeeds")
+		}
+		return
+	}
+	if cfg.Defaults.LogFile != "" {
+		t.Errorf("LogFile should remain empty on UserHomeDir error, got %q", cfg.Defaults.LogFile)
+	}
+}
+
 func TestPatternUnmarshal_UnknownType(t *testing.T) {
 	t.Parallel()
 

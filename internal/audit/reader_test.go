@@ -198,9 +198,9 @@ func TestExtractBracket(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		input     string
-		wantVal   string
-		wantRest  string
+		input    string
+		wantVal  string
+		wantRest string
 	}{
 		{"[hello] rest", "hello", " rest"},
 		{"[git push] extra", "git push", " extra"},

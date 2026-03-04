@@ -22,7 +22,7 @@ const (
 
 // Input is the raw hook JSON, decoded into the common envelope.
 type Input struct {
-	ToolName string          `json:"tool_name"`
+	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
 }
 

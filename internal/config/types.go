@@ -64,14 +64,14 @@ func (p *Pattern) UnmarshalTOML(data interface{}) error {
 // Rule is one entry in the ordered rule list. All deny patterns across all
 // rules are evaluated before allow patterns (two-pass model).
 type Rule struct {
-	Name        string                `toml:"name"`
-	Description string                `toml:"description"`
-	Allow       []Pattern             `toml:"allow"`
-	Deny        []Pattern             `toml:"deny"`
-	AllowRead   []string              `toml:"allow_read"`
-	DenyRead    []string              `toml:"deny_read"`
-	AllowWrite  []string              `toml:"allow_write"`
-	DenyWrite   []string              `toml:"deny_write"`
+	Name        string    `toml:"name"`
+	Description string    `toml:"description"`
+	Allow       []Pattern `toml:"allow"`
+	Deny        []Pattern `toml:"deny"`
+	AllowRead   []string  `toml:"allow_read"`
+	DenyRead    []string  `toml:"deny_read"`
+	AllowWrite  []string  `toml:"allow_write"`
+	DenyWrite   []string  `toml:"deny_write"`
 	// VariableAction overrides the global default for this rule.
 	// Empty string means "use global default".
 	VariableAction UnknownVariableAction `toml:"unknown_variable_action"`
@@ -99,7 +99,7 @@ func (c *Config) EffectiveDenySubshells(r *Rule) bool {
 // Defaults holds global configuration defaults.
 type Defaults struct {
 	LogFile               string                `toml:"log_file"`
-	LogFormat             string                `toml:"log_format"` // "text" | "json"
+	LogFormat             string                `toml:"log_format"`      // "text" | "json"
 	LogMaxSizeMB          int                   `toml:"log_max_size_mb"` // rotate at this many MB; 0 = disabled
 	LogMaxFiles           int                   `toml:"log_max_files"`   // rotated copies to keep
 	UnknownVariableAction UnknownVariableAction `toml:"unknown_variable_action"`

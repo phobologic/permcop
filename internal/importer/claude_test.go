@@ -213,7 +213,7 @@ func TestGroupPrefix(t *testing.T) {
 		{"*", "(other)"},
 		{"", "(other)"},
 		{"singleword", "singleword"},
-		{"tk:*", "tk"},        // bare wildcard with colon separator
+		{"tk:*", "tk"}, // bare wildcard with colon separator
 		{"permcop:*", "permcop"},
 	}
 
@@ -451,4 +451,3 @@ func TestRulesToTOML(t *testing.T) {
 		}
 	}
 }
-

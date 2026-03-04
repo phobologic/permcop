@@ -28,27 +28,15 @@ func newTestEngineWithEnv(t *testing.T, rules []config.Rule, defaults *config.De
 		logPath = os.DevNull
 	}
 	logger := audit.New(logPath, cfg.Defaults.LogFormat)
+	if env == nil {
+		return New(cfg, logger)
+	}
 	return NewWithEnv(cfg, logger, env)
 }
 
 func newTestEngine(t *testing.T, rules []config.Rule, defaults *config.Defaults) *Engine {
 	t.Helper()
-	cfg := &config.Config{Rules: rules}
-	if defaults != nil {
-		cfg.Defaults = *defaults
-	}
-	if cfg.Defaults.SubshellDepthLimit == 0 {
-		cfg.Defaults.SubshellDepthLimit = 3
-	}
-	if cfg.Defaults.UnknownVariableAction == "" {
-		cfg.Defaults.UnknownVariableAction = config.VariableActionDeny
-	}
-	logPath := cfg.Defaults.LogFile
-	if logPath == "" {
-		logPath = os.DevNull
-	}
-	logger := audit.New(logPath, cfg.Defaults.LogFormat)
-	return New(cfg, logger)
+	return newTestEngineWithEnv(t, rules, defaults, nil)
 }
 
 func TestEngine_BasicAllow(t *testing.T) {

@@ -1,0 +1,187 @@
+# permcop
+
+A rule-based permission enforcer for [Claude Code](https://claude.ai/code). Intercepts Claude Code tool calls via PreToolUse hooks and evaluates them against an ordered, deny-by-default rule set.
+
+## How it works
+
+permcop integrates as a Claude Code hook. Before Claude runs any Bash command or accesses any file, the hook invokes `permcop check`, which:
+
+1. Parses the command into constituent units (chained commands, subshells, redirects)
+2. Runs a **two-pass evaluation** against your config:
+   - **Pass 1 — Deny scan:** if any deny pattern matches any unit across all rules → DENY
+   - **Pass 2 — Allow scan:** if all units are covered by a single rule's allow patterns → ALLOW
+   - **Default:** DENY (no match = blocked)
+3. Logs every decision to an audit log
+4. Exits `0` (allow) or `2` (deny) — Claude Code sees the exit code and acts accordingly
+
+## Installation
+
+```bash
+go install github.com/mikecafarella/permcop/cmd/permcop@latest
+permcop init
+```
+
+`permcop init` creates a starter config at `~/.config/permcop/config.toml` and wires the hook into `~/.claude/settings.json`.
+
+## Config
+
+Config lives at `~/.config/permcop/config.toml` (global) and optionally `.permcop.toml` in a project directory (project rules are evaluated first).
+
+```toml
+[defaults]
+log_file = "~/.local/share/permcop/audit.log"
+log_format = "text"              # "text" or "json"
+unknown_variable_action = "deny" # "deny" | "warn" | "allow"
+allow_sudo = false
+deny_subshells = false
+subshell_depth_limit = 3
+
+# Rules are evaluated in order.
+# Pass 1: ANY deny pattern matching ANY unit → DENY immediately.
+# Pass 2: ALL units must be covered by ONE rule's allow patterns → ALLOW.
+# No match → DENY.
+
+[[rules]]
+name = "Allow safe git operations"
+allow = [
+  { type = "prefix", pattern = "git log" },
+  { type = "prefix", pattern = "git diff" },
+  { type = "exact",  pattern = "git status" },
+  { type = "glob",   pattern = "git show *" },
+]
+deny = [
+  { type = "prefix", pattern = "git push" },
+  { type = "regex",  pattern = "^git\\s+.*--force" },
+]
+
+[[rules]]
+name = "Read project source"
+allow_read = ["./src/**", "./tests/**"]
+deny_read  = ["./.env", "./secrets/**"]
+
+[[rules]]
+name = "Write build artifacts"
+allow = [{ type = "prefix", pattern = "go build" }]
+allow_write = ["/tmp/build/**"]
+```
+
+### Pattern types
+
+| Type | Example | Behavior |
+|------|---------|----------|
+| `exact` | `git status` | Full string equality |
+| `prefix` | `git log` | Matches `git log` or `git log <anything>` |
+| `glob` | `go test *` | Shell glob (`*` = any segment, `**` = recursive) |
+| `regex` | `^rm\s+-rf` | RE2 regular expression |
+
+Bare strings default to `glob`. Pattern types apply to command strings; file paths always use glob.
+
+### Variable and subshell handling
+
+Commands containing `$VAR` or `$(...)` can't be safely evaluated at check time. Behavior is configurable:
+
+- `unknown_variable_action = "deny"` — reject the command (default, most secure)
+- `unknown_variable_action = "warn"` — allow but write a WARN-level audit entry
+- `unknown_variable_action = "allow"` — permit silently
+
+Override per rule with `unknown_variable_action = "warn"`. Similarly, `deny_subshells = true` blocks any command containing `$(...)` subshells.
+
+### Important: single-rule coverage
+
+For a command to be allowed, **all parsed units must be covered by a single rule**. A chain like `echo hi > /tmp/out.txt` produces two units: the `echo` command and the `/tmp/out.txt` write. Both must be in the same rule's `allow` + `allow_write`:
+
+```toml
+[[rules]]
+name = "echo to tmp"
+allow       = [{ type = "prefix", pattern = "echo" }]
+allow_write = ["/tmp/**"]
+```
+
+## Tools governed
+
+permcop evaluates:
+
+| Claude Code tool | What's checked |
+|------------------|----------------|
+| `Bash` | Full command parsed into units (chains, pipes, subshells, redirects) |
+| `Read` | File path against `allow_read` / `deny_read` |
+| `Write` | File path against `allow_write` / `deny_write` |
+| `Edit` | File path against `allow_write` / `deny_write` |
+| `MultiEdit` | File path against `allow_write` / `deny_write` |
+| Everything else | Allowed through (permcop only governs what it knows about) |
+
+## Commands
+
+```
+permcop check                         Hook entry point (stdin → exit 0/2)
+permcop explain <command>             Dry-run: show rule evaluation
+permcop validate [config-file]        Validate config syntax and structure
+permcop init                          Wire hook + create starter config
+permcop import-claude-settings [file] Convert Claude Code permissions to TOML
+permcop version                       Print version
+```
+
+### explain
+
+```
+$ permcop explain 'git status && git push origin main'
+Command:  git status && git push origin main
+Units:    [command git status], [command git push origin main]
+
+Result:   DENY
+Reason:   matched deny pattern
+Rule:     "Allow safe git operations"
+Pattern:  prefix:git push
+Hit unit: git push origin main
+```
+
+### import-claude-settings
+
+Converts existing Claude Code permission rules (`~/.claude/settings.json`) to permcop TOML:
+
+```bash
+permcop import-claude-settings >> ~/.config/permcop/config.toml
+```
+
+Bash rules map to command `allow`/`deny` patterns. `Read`/`Edit` rules map to `allow_read`/`deny_read`/`allow_write`/`deny_write`. `ask` rules and non-file tools (WebFetch, MCP) are reported as warnings/skipped.
+
+## Audit log
+
+Every decision is logged to `~/.local/share/permcop/audit.log` (configurable).
+
+**Text format (default):**
+```
+2026-03-04T04:58:13Z ALLOW  rule="Allow safe git operations" pattern="exact:git status"
+  original: git status
+  units:    [git status]
+  hit:      git status
+
+2026-03-04T04:58:20Z DENY  rule="Allow safe git operations" pattern="prefix:git push"
+  original: git status && git push origin main
+  units:    [git status] [git push origin main]
+  hit:      git push origin main
+```
+
+**JSON format** (`log_format = "json"`): one object per line, suitable for `jq`.
+
+## Hook wiring
+
+`permcop init` adds entries like this to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Bash",      "hooks": [{"type": "command", "command": "permcop check"}]},
+      {"matcher": "Read",      "hooks": [{"type": "command", "command": "permcop check"}]},
+      {"matcher": "Write",     "hooks": [{"type": "command", "command": "permcop check"}]},
+      {"matcher": "Edit",      "hooks": [{"type": "command", "command": "permcop check"}]},
+      {"matcher": "MultiEdit", "hooks": [{"type": "command", "command": "permcop check"}]}
+    ]
+  }
+}
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

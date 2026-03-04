@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,7 @@ func TestLoggerMultipleWrites(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.log")
 
-	logger := New(path, "text")
+	logger := New(path, "text", 0, 0)
 	defer logger.Close()
 
 	ts := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -132,11 +133,109 @@ func TestDenyEntryDefaultDenyLabel(t *testing.T) {
 	}
 }
 
+func TestLoggerRotation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+
+	// maxSizeMB=0 triggers rotation after 0 bytes — effectively on every write
+	// after the first — but that's awkward to test. Instead write a tiny file,
+	// then create a logger with maxBytes set low via the internal field directly.
+	// We test via the exported New() by writing enough to cross the threshold.
+	//
+	// Use maxSizeMB=1, maxFiles=2 and pre-fill the file to just under 1 MB so
+	// a single additional write pushes it over.
+	logger := New(path, "text", 1, 2)
+	defer logger.Close()
+
+	// Pre-fill with ~1 MB of data by writing directly to the file.
+	fill := strings.Repeat("x", 1024*1024)
+	if err := os.WriteFile(path, []byte(fill), 0600); err != nil {
+		t.Fatalf("pre-fill: %v", err)
+	}
+	// Open the logger to the existing file (lazy open happens on first Log).
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	logger.file = f
+
+	// This write should trigger rotation because size >= 1 MB threshold.
+	if err := logger.Log(Entry{
+		Timestamp:       time.Now(),
+		Decision:        DecisionAllow,
+		OriginalCommand: "git status",
+	}); err != nil {
+		t.Fatalf("Log after pre-fill: %v", err)
+	}
+
+	// audit.log.1 should now exist (the rotated copy).
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Fatalf("expected %s.1 after rotation: %v", path, err)
+	}
+
+	// audit.log should be a fresh (small) file.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("current log missing after rotation: %v", err)
+	}
+	if info.Size() >= 1024*1024 {
+		t.Errorf("current log is %d bytes; expected fresh small file", info.Size())
+	}
+}
+
+func TestLoggerRotationPrunesOldest(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+
+	// Pre-create rotated files .1 and .2 (maxFiles=2 means .3 must not exist).
+	for i := 1; i <= 2; i++ {
+		if err := os.WriteFile(fmt.Sprintf("%s.%d", path, i), []byte("old"), 0600); err != nil {
+			t.Fatalf("create rotated file: %v", err)
+		}
+	}
+
+	logger := New(path, "text", 1, 2)
+	defer logger.Close()
+
+	fill := strings.Repeat("x", 1024*1024)
+	if err := os.WriteFile(path, []byte(fill), 0600); err != nil {
+		t.Fatalf("pre-fill: %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	logger.file = f
+
+	if err := logger.Log(Entry{
+		Timestamp:       time.Now(),
+		Decision:        DecisionAllow,
+		OriginalCommand: "git status",
+	}); err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+
+	// .3 must not exist (pruned).
+	if _, err := os.Stat(fmt.Sprintf("%s.3", path)); err == nil {
+		t.Errorf("expected %s.3 to be pruned but it exists", path)
+	}
+	// .1 and .2 must exist.
+	for i := 1; i <= 2; i++ {
+		if _, err := os.Stat(fmt.Sprintf("%s.%d", path, i)); err != nil {
+			t.Errorf("expected %s.%d to exist: %v", path, i, err)
+		}
+	}
+}
+
 func TestLoggerCloseIdempotent(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	logger := New(filepath.Join(dir, "audit.log"), "text")
+	logger := New(filepath.Join(dir, "audit.log"), "text", 0, 0)
 
 	// Close on a logger that never wrote — should be a no-op.
 	if err := logger.Close(); err != nil {

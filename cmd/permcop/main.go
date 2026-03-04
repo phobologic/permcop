@@ -160,7 +160,7 @@ func runCheck() {
 		os.Exit(2)
 	}
 
-	logger := audit.New(cfg.Defaults.LogFile, cfg.Defaults.LogFormat)
+	logger := audit.New(cfg.Defaults.LogFile, cfg.Defaults.LogFormat, cfg.Defaults.LogMaxSizeMB, cfg.Defaults.LogMaxFiles)
 	defer logger.Close()
 
 	denyAndExit := func(reason string) {
@@ -285,7 +285,7 @@ func runExplain(command string) {
 	}
 
 	// Null logger for explain (no file writes)
-	logger := audit.New(os.DevNull, "text")
+	logger := audit.New(os.DevNull, "text", 0, 0)
 	defer logger.Close()
 	engine, err := rules.New(cfg, logger)
 	if err != nil {
@@ -828,6 +828,8 @@ const starterConfig = `# permcop configuration
 [defaults]
 log_file = "~/.local/share/permcop/audit.log"
 log_format = "text"              # "text" or "json"
+# log_max_size_mb = 10           # rotate when log exceeds this size (0 = never rotate)
+# log_max_files   = 5            # number of rotated copies to keep
 unknown_variable_action = "deny" # "deny", "warn" (allow + log), or "allow"
 allow_sudo = false
 deny_subshells = false           # set true to block $(...) in all commands

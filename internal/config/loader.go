@@ -217,6 +217,12 @@ func mergeAll(layers ...*Config) *Config {
 		if result.Defaults.SubshellDepthLimit == 0 && layer.Defaults.SubshellDepthLimit != 0 {
 			result.Defaults.SubshellDepthLimit = layer.Defaults.SubshellDepthLimit
 		}
+		if result.Defaults.LogMaxSizeMB == 0 && layer.Defaults.LogMaxSizeMB != 0 {
+			result.Defaults.LogMaxSizeMB = layer.Defaults.LogMaxSizeMB
+		}
+		if result.Defaults.LogMaxFiles == 0 && layer.Defaults.LogMaxFiles != 0 {
+			result.Defaults.LogMaxFiles = layer.Defaults.LogMaxFiles
+		}
 	}
 	return result
 }
@@ -238,6 +244,12 @@ func applyDefaults(cfg *Config) error {
 	}
 	if cfg.Defaults.SubshellDepthLimit == 0 {
 		cfg.Defaults.SubshellDepthLimit = 3
+	}
+	if cfg.Defaults.LogMaxSizeMB == 0 {
+		cfg.Defaults.LogMaxSizeMB = 10
+	}
+	if cfg.Defaults.LogMaxFiles == 0 {
+		cfg.Defaults.LogMaxFiles = 5
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

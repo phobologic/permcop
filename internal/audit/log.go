@@ -45,19 +45,26 @@ type Entry struct {
 
 // Logger writes audit entries to a file.
 type Logger struct {
-	path   string
-	format string // "text" or "json"
-	mu     sync.Mutex
-	file   *os.File // nil until first Log()
+	path     string
+	format   string // "text" or "json"
+	maxBytes int64  // 0 = rotation disabled
+	maxFiles int
+	mu       sync.Mutex
+	file     *os.File // nil until first Log()
 }
 
 // New creates a Logger. The log file and its parent directories are created
 // on the first write (lazy), so construction never fails.
-func New(path, format string) *Logger {
+// maxSizeMB and maxFiles control rotation; pass 0 for either to disable rotation.
+func New(path, format string, maxSizeMB, maxFiles int) *Logger {
 	if format == "" {
 		format = "text"
 	}
-	return &Logger{path: path, format: format}
+	var maxBytes int64
+	if maxSizeMB > 0 && maxFiles > 0 {
+		maxBytes = int64(maxSizeMB) * 1024 * 1024
+	}
+	return &Logger{path: path, format: format, maxBytes: maxBytes, maxFiles: maxFiles}
 }
 
 // Log writes an entry to the audit log.
@@ -76,6 +83,12 @@ func (l *Logger) Log(e Entry) error {
 		l.file = f
 	}
 
+	if l.maxBytes > 0 {
+		if info, err := l.file.Stat(); err == nil && info.Size() >= l.maxBytes {
+			l.rotate() // errors are ignored; logging continues on un-rotated file
+		}
+	}
+
 	var (
 		line string
 		err  error
@@ -91,6 +104,37 @@ func (l *Logger) Log(e Entry) error {
 
 	_, err = fmt.Fprintln(l.file, line)
 	return err
+}
+
+// rotate closes the current log file, shifts existing numbered files up by one,
+// deletes any file that would exceed maxFiles, then opens a fresh log file.
+// Errors are ignored (fail-open): a rotation failure must not block audit writes.
+func (l *Logger) rotate() {
+	if l.file != nil {
+		l.file.Close()
+		l.file = nil
+	}
+
+	// Delete the file that would be pushed beyond maxFiles.
+	oldest := fmt.Sprintf("%s.%d", l.path, l.maxFiles)
+	os.Remove(oldest) //nolint:errcheck
+
+	// Shift existing rotated files: path.N-1 → path.N (in reverse order).
+	for i := l.maxFiles - 1; i >= 1; i-- {
+		src := fmt.Sprintf("%s.%d", l.path, i)
+		dst := fmt.Sprintf("%s.%d", l.path, i+1)
+		os.Rename(src, dst) //nolint:errcheck
+	}
+
+	// Rename the current log to path.1.
+	os.Rename(l.path, l.path+".1") //nolint:errcheck
+
+	// Open a fresh log file.
+	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err == nil {
+		l.file = f
+	}
+	// On error l.file stays nil; the next Log() call will reopen the file.
 }
 
 // Close releases the underlying file handle. It is safe to call on a Logger

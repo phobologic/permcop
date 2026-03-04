@@ -27,7 +27,7 @@ func newTestEngineWithEnv(t *testing.T, rules []config.Rule, defaults *config.De
 	if logPath == "" {
 		logPath = os.DevNull
 	}
-	logger := audit.New(logPath, cfg.Defaults.LogFormat)
+	logger := audit.New(logPath, cfg.Defaults.LogFormat, 0, 0)
 	var (
 		e   *Engine
 		err error

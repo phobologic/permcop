@@ -100,6 +100,8 @@ func (c *Config) EffectiveDenySubshells(r *Rule) bool {
 type Defaults struct {
 	LogFile               string                `toml:"log_file"`
 	LogFormat             string                `toml:"log_format"` // "text" | "json"
+	LogMaxSizeMB          int                   `toml:"log_max_size_mb"` // rotate at this many MB; 0 = disabled
+	LogMaxFiles           int                   `toml:"log_max_files"`   // rotated copies to keep
 	UnknownVariableAction UnknownVariableAction `toml:"unknown_variable_action"`
 	AllowSudo             bool                  `toml:"allow_sudo"`
 	SubshellDepthLimit    int                   `toml:"subshell_depth_limit"`

@@ -10,23 +10,50 @@ import (
 
 // warnBroadAllowRules emits a stderr warning for any rule that combines
 // unknown_variable_action=allow with a broad allow pattern ("*" or "**").
-// Such rules silently permit any command containing a variable regardless of
-// what the variable expands to, which is almost always a misconfiguration.
+// Such rules silently permit any command or file path containing a variable
+// regardless of what the variable expands to, which is almost always a
+// misconfiguration. Checks r.Allow (command patterns), r.AllowRead, and
+// r.AllowWrite (file glob patterns).
 func warnBroadAllowRules(cfg *Config) {
 	for i := range cfg.Rules {
 		r := &cfg.Rules[i]
 		if cfg.EffectiveVariableAction(r) != VariableActionAllow {
 			continue
 		}
+		name := r.Name
+		if name == "" {
+			name = fmt.Sprintf("rule[%d]", i)
+		}
+		warned := false
 		for _, p := range r.Allow {
 			if p.Pattern == "*" || p.Pattern == "**" {
-				name := r.Name
-				if name == "" {
-					name = fmt.Sprintf("rule[%d]", i)
-				}
 				fmt.Fprintf(os.Stderr,
 					"permcop: warning: rule %q: unknown_variable_action=allow with broad pattern %q is high risk\n",
 					name, p.Pattern)
+				warned = true
+				break
+			}
+		}
+		if warned {
+			continue
+		}
+		for _, p := range r.AllowRead {
+			if p == "*" || p == "**" {
+				fmt.Fprintf(os.Stderr,
+					"permcop: warning: rule %q: unknown_variable_action=allow with broad allow_read pattern %q is high risk\n",
+					name, p)
+				warned = true
+				break
+			}
+		}
+		if warned {
+			continue
+		}
+		for _, p := range r.AllowWrite {
+			if p == "*" || p == "**" {
+				fmt.Fprintf(os.Stderr,
+					"permcop: warning: rule %q: unknown_variable_action=allow with broad allow_write pattern %q is high risk\n",
+					name, p)
 				break
 			}
 		}

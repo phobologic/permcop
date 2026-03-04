@@ -479,6 +479,64 @@ allow = ["*"]
 	}
 }
 
+func TestWarnBroadAllowRules_FiresForBroadAllowRead(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[defaults]
+unknown_variable_action = "allow"
+
+[[rules]]
+name = "broad read"
+allow_read = ["**"]
+`)
+
+	var loadErr error
+	got := captureStderr(t, func() {
+		_, loadErr = LoadFile(filepath.Join(dir, "config.toml"))
+	})
+	if loadErr != nil {
+		t.Fatalf("LoadFile: %v", loadErr)
+	}
+	if !strings.Contains(got, `rule "broad read"`) {
+		t.Errorf("expected warning mentioning rule name, got: %q", got)
+	}
+	if !strings.Contains(got, "allow_read") {
+		t.Errorf("expected warning mentioning allow_read, got: %q", got)
+	}
+	if !strings.Contains(got, "high risk") {
+		t.Errorf("expected high-risk warning, got: %q", got)
+	}
+}
+
+func TestWarnBroadAllowRules_FiresForBroadAllowWrite(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[defaults]
+unknown_variable_action = "allow"
+
+[[rules]]
+name = "broad write"
+allow_write = ["*"]
+`)
+
+	var loadErr error
+	got := captureStderr(t, func() {
+		_, loadErr = LoadFile(filepath.Join(dir, "config.toml"))
+	})
+	if loadErr != nil {
+		t.Fatalf("LoadFile: %v", loadErr)
+	}
+	if !strings.Contains(got, `rule "broad write"`) {
+		t.Errorf("expected warning mentioning rule name, got: %q", got)
+	}
+	if !strings.Contains(got, "allow_write") {
+		t.Errorf("expected warning mentioning allow_write, got: %q", got)
+	}
+	if !strings.Contains(got, "high risk") {
+		t.Errorf("expected high-risk warning, got: %q", got)
+	}
+}
+
 func TestApplyDefaults_HomeDirError(t *testing.T) {
 	// Simulate os.UserHomeDir() failure by unsetting HOME (and related vars).
 	// This test cannot be parallel because it mutates environment variables.

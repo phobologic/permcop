@@ -204,6 +204,11 @@ func wordToString(word *syntax.Word, cwd string, remainingDepth int) (string, wo
 	return sb.String(), flags
 }
 
+// dblQuotedToString is intentionally separate from wordToString rather than a
+// recursive call. Inside double quotes, SglQuoted and ArithmExp are not valid
+// constructs, so this function only handles the subset of part types that can
+// legally appear within a double-quoted word. Merging the two would require
+// either dead branches here or conditional logic that obscures that constraint.
 func dblQuotedToString(dq *syntax.DblQuoted, cwd string, remainingDepth int) (string, wordFlags) {
 	var sb strings.Builder
 	var flags wordFlags

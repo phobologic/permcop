@@ -132,6 +132,35 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name:    "fd redirect 2>&1 no extra unit",
+			command: "make install 2>&1",
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "make install"},
+			},
+		},
+		{
+			name:    "fd redirect 1>&2 no extra unit",
+			command: "echo hi 1>&2",
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "echo hi"},
+			},
+		},
+		{
+			name:    "fd redirect <&0 no extra unit",
+			command: "cat <&0",
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "cat"},
+			},
+		},
+		{
+			name:    "real file redirect with fd redirect",
+			command: "cmd >out.txt 2>&1",
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "cmd"},
+				{Kind: UnitWriteFile, Value: "/tmp/testcwd/out.txt"},
+			},
+		},
+		{
 			name:    "parse error",
 			command: "echo $((",
 			wantErr: true,

@@ -115,15 +115,17 @@ func (v *visitor) handleRedirect(n *syntax.Redirect) {
 
 	// Heredocs (<<, <<-, <<<) provide inline stdin to a command — they don't
 	// read or write files, so there's no file unit to emit.
+	// FD duplicates (2>&1, 1<&0) redirect between file descriptors — no file involved.
 	switch n.Op {
-	case syntax.Hdoc, syntax.DashHdoc, syntax.WordHdoc:
+	case syntax.Hdoc, syntax.DashHdoc, syntax.WordHdoc,
+		syntax.DplOut, syntax.DplIn: // fd-to-fd: 2>&1, 1<&0 — no file involved
 		return
 	}
 
 	var kind UnitKind
 	switch n.Op {
 	case syntax.RdrOut, syntax.AppOut, syntax.RdrAll, syntax.AppAll,
-		syntax.ClbOut, syntax.DplOut:
+		syntax.ClbOut:
 		kind = UnitWriteFile
 	default: // RdrIn, DplIn, RdrInOut, etc.
 		kind = UnitReadFile

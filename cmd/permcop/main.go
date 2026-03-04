@@ -189,17 +189,22 @@ func runExplain(command string) {
 	logger := audit.New(os.DevNull, "text")
 	engine := rules.New(cfg, logger)
 
-	// Print parsed units first
-	parsed := parser.Parse(command, cwd, cfg.Defaults.SubshellDepthLimit)
-	if parsed.ParseError != nil {
-		fmt.Printf("PARSE ERROR: %v\n", parsed.ParseError)
+	result, err := engine.Check(command, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "check error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Parse errors are surfaced via result.Reason (engine is fail-closed).
+	if !result.Allowed && strings.HasPrefix(result.Reason, "command parse error:") {
+		fmt.Printf("PARSE ERROR: %v\n", strings.TrimPrefix(result.Reason, "command parse error: "))
 		fmt.Println("Result: DENY (parse error)")
 		return
 	}
 
 	fmt.Printf("Command:  %s\n", command)
 	fmt.Printf("Units:    ")
-	for i, u := range parsed.Units {
+	for i, u := range result.Units {
 		if i > 0 {
 			fmt.Print(", ")
 		}
@@ -214,12 +219,6 @@ func runExplain(command string) {
 	}
 	fmt.Println()
 	fmt.Println()
-
-	result, err := engine.Check(command, cwd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "check error: %v\n", err)
-		os.Exit(1)
-	}
 
 	if result.Allowed {
 		fmt.Printf("Result:   ALLOW\n")

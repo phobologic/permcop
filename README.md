@@ -97,6 +97,8 @@ allow       = [{ type = "prefix", pattern = "echo" }]
 allow_write = ["/tmp/**"]
 ```
 
+The same `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply uniformly to both contexts: shell redirections inside Bash commands, and direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls. A single rule can — and often should — cover both.
+
 ## Tools governed
 
 permcop evaluates:

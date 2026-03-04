@@ -144,6 +144,39 @@ deny_write = ["/tmp/secrets/**"]
 
 The same `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply uniformly to both contexts: shell redirections inside Bash commands, and direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls.
 
+> **Design note — `allow_write` is a zone capability, not a per-command constraint**
+>
+> `allow_write` patterns are evaluated per-unit, like everything else: any write
+> unit can be satisfied by *any* rule's `allow_write`, regardless of which rule
+> covered the command unit. A "write zone" rule that allows `/tmp/**` applies
+> equally to `echo`, `git log`, `go build`, or any other allowed command that
+> redirects there.
+>
+> **permcop does not currently support scoped `allow_write`** — there is no way
+> to say "only `go test` may write to `coverage.out`; other allowed commands may
+> not redirect there." The `allow_write` in a rule is always a global zone grant,
+> not tied to that rule's `allow` patterns.
+>
+> We're considering whether a scoped mode would be worth building. Under that
+> model, a rule's `allow_write` would only cover write units whose command was
+> *also* matched by that same rule's `allow` patterns. This would let you express
+> intent like:
+>
+> ```toml
+> # (hypothetical — not yet implemented)
+> [[rules]]
+> name = "go test writes coverage"
+> scoped_write = true
+> allow = [{ type = "prefix", pattern = "go test" }]
+> allow_write = ["./coverage.out"]
+> # echo pwned > coverage.out would be denied even if echo is allowed elsewhere
+> ```
+>
+> If you have a use case where the current zone model falls short — or where
+> scoped write constraints would meaningfully improve your security posture —
+> please [open an issue](https://github.com/mikecafarella/permcop/issues) and
+> describe it. Your feedback will shape whether and how this gets built.
+
 ## Tools governed
 
 permcop evaluates:

@@ -1224,7 +1224,7 @@ type tuiState struct {
 	offset int
 	termW  int
 	termH  int
-	viewH  int // rows available for items = termH - 4 (header + blank + blank + footer)
+	viewH  int // rows available for list items = termH - 9 (header+blank+sep+detail+sep+footer)
 }
 
 // clampOffset ensures cursor is visible in the viewport.
@@ -1259,34 +1259,65 @@ func (t *tuiState) statusChar(i int) string {
 }
 
 const (
-	tuiPrefixCols = 6  // "  [ ] "
-	tuiMetaCols   = 26 // "99×  last seen 9 days ago  "
+	tuiPrefixCols = 6 // "  [ ] "
+	tuiDetailH    = 4 // detail panel height: command + count/time + units + blank
 )
 
 func (t *tuiState) formatRow(i int) string {
-	entry := t.seen[t.items[i]]
-	meta := fmt.Sprintf("%d×  last seen %s", entry.count, timeAgo(entry.lastSeen))
-	cmdLabel := labelForEntry(t.items[i], entry.passUnits)
-
-	available := t.termW - tuiPrefixCols - tuiMetaCols - 2
+	available := t.termW - tuiPrefixCols - 1
 	if available < 10 {
 		available = 10
 	}
+	cmdLabel := t.items[i]
 	runes := []rune(cmdLabel)
 	if len(runes) > available {
 		runes = append(runes[:available-1], '…')
 		cmdLabel = string(runes)
 	}
-	pad := available - len([]rune(cmdLabel))
-	if pad < 0 {
-		pad = 0
+	return fmt.Sprintf("  [%s] %s", t.statusChar(i), cmdLabel)
+}
+
+func (t *tuiState) renderDetail() {
+	i := t.cursor
+	cmd := t.items[i]
+	entry := t.seen[cmd]
+
+	// Line 1: full command, truncated to terminal width.
+	maxW := t.termW - 4
+	if maxW < 10 {
+		maxW = 10
 	}
-	return fmt.Sprintf("  [%s] %s%s  %s", t.statusChar(i), cmdLabel, strings.Repeat(" ", pad), meta)
+	cmdDisplay := cmd
+	if runes := []rune(cmdDisplay); len(runes) > maxW {
+		cmdDisplay = string(append(runes[:maxW-1], '…'))
+	}
+	fmt.Printf("\033[K  %s\r\n", cmdDisplay)
+
+	// Line 2: count + last seen.
+	fmt.Printf("\033[K  %d×  ·  last seen %s\r\n", entry.count, timeAgo(entry.lastSeen))
+
+	// Line 3: pass units, only when they differ from the command itself.
+	if len(entry.passUnits) > 0 && !(len(entry.passUnits) == 1 && entry.passUnits[0] == cmd) {
+		unitsStr := strings.Join(entry.passUnits, ", ")
+		maxU := t.termW - 7
+		if maxU < 10 {
+			maxU = 10
+		}
+		if runes := []rune(unitsStr); len(runes) > maxU {
+			unitsStr = string(append(runes[:maxU-1], '…'))
+		}
+		fmt.Printf("\033[K  → %s\r\n", unitsStr)
+	} else {
+		fmt.Print("\033[K\r\n")
+	}
+
+	// Line 4: blank padding.
+	fmt.Print("\033[K\r\n")
 }
 
 func (t *tuiState) render() {
 	fmt.Print("\033[H")
-	fmt.Print("\033[KCommands deferred to Claude Code (no permcop rule matched):\r\n")
+	fmt.Printf("\033[K  Commands without permcop rules (%d total):\r\n", len(t.items))
 	fmt.Print("\033[K\r\n")
 
 	end := t.offset + t.viewH
@@ -1306,7 +1337,12 @@ func (t *tuiState) render() {
 	for i := end - t.offset; i < t.viewH; i++ {
 		fmt.Print("\033[K\r\n")
 	}
-	fmt.Print("\033[K\r\n")
+
+	// Separator + detail panel.
+	fmt.Printf("\033[K%s\r\n", strings.Repeat("─", t.termW))
+	t.renderDetail()
+	fmt.Printf("\033[K%s\r\n", strings.Repeat("─", t.termW))
+
 	pos := fmt.Sprintf("%d/%d", t.cursor+1, len(t.items))
 	fmt.Printf("\033[K  \033[2m<e/Enter> edit  <Space> skip  <j/k> navigate  <q> quit   %s\033[0m", pos)
 }
@@ -1388,9 +1424,10 @@ func runSuggestTUI(ordered []string, seen map[string]*cmdEntry, destPath string)
 		h = 24
 	}
 
-	viewH := h - 4
-	if viewH < 1 {
-		viewH = 1
+	// Layout: header(1) + blank(1) + list(viewH) + sep(1) + detail(tuiDetailH) + sep(1) + footer(1) = viewH + 6 + tuiDetailH
+	viewH := h - 6 - tuiDetailH
+	if viewH < 2 {
+		viewH = 2
 	}
 
 	t := &tuiState{

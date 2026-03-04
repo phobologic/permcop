@@ -116,6 +116,22 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name:    "subshell inside double-quoted argument",
+			command: `git commit -m "$(cat file)"`,
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "git commit -m $(...)", HasSubshell: true},
+				{Kind: UnitCommand, Value: "cat file"},
+			},
+		},
+		{
+			name:    "subshell with heredoc inside double-quoted argument",
+			command: "git commit -m \"$(cat <<'EOF'\nsome message\nEOF\n)\"",
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "git commit -m $(...)", HasSubshell: true},
+				{Kind: UnitCommand, Value: "cat"},
+			},
+		},
+		{
 			name:    "parse error",
 			command: "echo $((",
 			wantErr: true,

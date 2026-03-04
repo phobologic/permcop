@@ -113,10 +113,17 @@ func (v *visitor) handleRedirect(n *syntax.Redirect) {
 
 	path, flags := wordToString(n.Word, v.cwd, v.maxDepth-1)
 
+	// Heredocs (<<, <<-, <<<) provide inline stdin to a command — they don't
+	// read or write files, so there's no file unit to emit.
+	switch n.Op {
+	case syntax.Hdoc, syntax.DashHdoc, syntax.WordHdoc:
+		return
+	}
+
 	var kind UnitKind
 	switch n.Op {
 	case syntax.RdrOut, syntax.AppOut, syntax.RdrAll, syntax.AppAll,
-		syntax.ClbOut, syntax.DplOut, syntax.Hdoc, syntax.DashHdoc, syntax.WordHdoc:
+		syntax.ClbOut, syntax.DplOut:
 		kind = UnitWriteFile
 	default: // RdrIn, DplIn, RdrInOut, etc.
 		kind = UnitReadFile
@@ -150,14 +157,20 @@ func (v *visitor) walkSubshellsInWord(word *syntax.Word, depth int) {
 	}
 
 	for _, part := range word.Parts {
-		cs, ok := part.(*syntax.CmdSubst)
-		if !ok {
-			continue
+		switch p := part.(type) {
+		case *syntax.CmdSubst:
+			inner := &visitor{cwd: v.cwd, maxDepth: v.maxDepth - depth}
+			syntax.Walk(p, inner.walk)
+			v.units = append(v.units, inner.units...)
+		case *syntax.DblQuoted:
+			for _, dqPart := range p.Parts {
+				if cs, ok := dqPart.(*syntax.CmdSubst); ok {
+					inner := &visitor{cwd: v.cwd, maxDepth: v.maxDepth - depth}
+					syntax.Walk(cs, inner.walk)
+					v.units = append(v.units, inner.units...)
+				}
+			}
 		}
-		// Parse the subshell content
-		inner := &visitor{cwd: v.cwd, maxDepth: v.maxDepth - depth}
-		syntax.Walk(cs, inner.walk)
-		v.units = append(v.units, inner.units...)
 	}
 }
 

@@ -28,10 +28,19 @@ func newTestEngineWithEnv(t *testing.T, rules []config.Rule, defaults *config.De
 		logPath = os.DevNull
 	}
 	logger := audit.New(logPath, cfg.Defaults.LogFormat)
+	var (
+		e   *Engine
+		err error
+	)
 	if env == nil {
-		return New(cfg, logger)
+		e, err = New(cfg, logger)
+	} else {
+		e, err = NewWithEnv(cfg, logger, env)
 	}
-	return NewWithEnv(cfg, logger, env)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	return e
 }
 
 func newTestEngine(t *testing.T, rules []config.Rule, defaults *config.Defaults) *Engine {

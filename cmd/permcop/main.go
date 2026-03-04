@@ -106,7 +106,10 @@ func runCheck() {
 		denyAndExit(fmt.Sprintf("permcop: unrecognized hook input format: %v", err))
 	}
 
-	engine := rules.New(cfg, logger)
+	engine, err := rules.New(cfg, logger)
+	if err != nil {
+		denyAndExit(fmt.Sprintf("permcop: invalid config pattern: %v", err))
+	}
 	var result *rules.Result
 
 	switch in.Kind {
@@ -189,7 +192,11 @@ func runExplain(command string) {
 	// Null logger for explain (no file writes)
 	logger := audit.New(os.DevNull, "text")
 	defer logger.Close()
-	engine := rules.New(cfg, logger)
+	engine, err := rules.New(cfg, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config error: invalid pattern: %v\n", err)
+		os.Exit(1)
+	}
 
 	result, err := engine.Check(command, cwd)
 	if err != nil {

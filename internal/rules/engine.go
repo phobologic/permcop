@@ -14,9 +14,6 @@ import (
 	"github.com/mikecafarella/permcop/internal/parser"
 )
 
-// expandVarsRe matches ${VAR} and $VAR shell variable references.
-var expandVarsRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
-
 // compiledPattern holds a pre-compiled pattern for fast repeated matching.
 // Glob and regex patterns are compiled once at engine construction.
 type compiledPattern struct {
@@ -25,15 +22,22 @@ type compiledPattern struct {
 	g  glob.Glob      // non-nil for PatternGlob
 }
 
-func newCompiledPattern(p config.Pattern) compiledPattern {
+func newCompiledPattern(p config.Pattern) (compiledPattern, error) {
 	cp := compiledPattern{p: p}
+	var err error
 	switch p.Type {
 	case config.PatternGlob, "":
-		cp.g, _ = glob.Compile(p.Pattern)
+		cp.g, err = glob.Compile(p.Pattern)
+		if err != nil {
+			return compiledPattern{}, fmt.Errorf("invalid glob pattern %q: %w", p.Pattern, err)
+		}
 	case config.PatternRegex:
-		cp.re, _ = regexp.Compile(p.Pattern)
+		cp.re, err = regexp.Compile(p.Pattern)
+		if err != nil {
+			return compiledPattern{}, fmt.Errorf("invalid regex pattern %q: %w", p.Pattern, err)
+		}
 	}
-	return cp
+	return cp, nil
 }
 
 func (cp compiledPattern) match(value string) bool {
@@ -89,27 +93,36 @@ type compiledRule struct {
 	denyWrite  []compiledGlobPath
 }
 
-func compileRules(rules []config.Rule, homeDir string) []compiledRule {
+func compileRules(rules []config.Rule, homeDir string) ([]compiledRule, error) {
 	cr := make([]compiledRule, len(rules))
 	for i := range rules {
 		r := &rules[i]
 		cr[i].rule = r
-		cr[i].allow = compilePatterns(r.Allow)
-		cr[i].deny = compilePatterns(r.Deny)
+		var err error
+		if cr[i].allow, err = compilePatterns(r.Allow); err != nil {
+			return nil, fmt.Errorf("rule %q allow: %w", r.Name, err)
+		}
+		if cr[i].deny, err = compilePatterns(r.Deny); err != nil {
+			return nil, fmt.Errorf("rule %q deny: %w", r.Name, err)
+		}
 		cr[i].allowRead = compileGlobPaths(r.AllowRead, homeDir)
 		cr[i].denyRead = compileGlobPaths(r.DenyRead, homeDir)
 		cr[i].allowWrite = compileGlobPaths(r.AllowWrite, homeDir)
 		cr[i].denyWrite = compileGlobPaths(r.DenyWrite, homeDir)
 	}
-	return cr
+	return cr, nil
 }
 
-func compilePatterns(ps []config.Pattern) []compiledPattern {
+func compilePatterns(ps []config.Pattern) ([]compiledPattern, error) {
 	out := make([]compiledPattern, len(ps))
 	for i, p := range ps {
-		out[i] = newCompiledPattern(p)
+		cp, err := newCompiledPattern(p)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = cp
 	}
-	return out
+	return out, nil
 }
 
 func compileGlobPaths(patterns []string, homeDir string) []compiledGlobPath {
@@ -136,27 +149,37 @@ type Engine struct {
 }
 
 // New creates an Engine using the process environment for variable expansion.
-func New(cfg *config.Config, logger *audit.Logger) *Engine {
+// Returns an error if any rule contains an invalid glob or regex pattern.
+func New(cfg *config.Config, logger *audit.Logger) (*Engine, error) {
 	homeDir, _ := os.UserHomeDir()
+	cr, err := compileRules(cfg.Rules, homeDir)
+	if err != nil {
+		return nil, err
+	}
 	return &Engine{
 		cfg:           cfg,
 		logger:        logger,
 		env:           osEnvMap(),
 		homeDir:       homeDir,
-		compiledRules: compileRules(cfg.Rules, homeDir),
-	}
+		compiledRules: cr,
+	}, nil
 }
 
 // NewWithEnv creates an Engine with an explicit environment map, primarily for testing.
-func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string) *Engine {
+// Returns an error if any rule contains an invalid glob or regex pattern.
+func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string) (*Engine, error) {
 	homeDir, _ := os.UserHomeDir()
+	cr, err := compileRules(cfg.Rules, homeDir)
+	if err != nil {
+		return nil, err
+	}
 	return &Engine{
 		cfg:           cfg,
 		logger:        logger,
 		env:           env,
 		homeDir:       homeDir,
-		compiledRules: compileRules(cfg.Rules, homeDir),
-	}
+		compiledRules: cr,
+	}, nil
 }
 
 // osEnvMap converts os.Environ() into a map for fast lookup.
@@ -437,17 +460,11 @@ func patternString(p config.Pattern) string {
 // any variable was missing from env.
 func expandVars(s string, env map[string]string) (string, bool) {
 	allResolved := true
-	result := expandVarsRe.ReplaceAllStringFunc(s, func(match string) string {
-		// Extract variable name from either ${VAR} or $VAR form.
-		sub := expandVarsRe.FindStringSubmatch(match)
-		name := sub[1]
-		if name == "" {
-			name = sub[2]
-		}
+	result := os.Expand(s, func(name string) string {
 		val, ok := env[name]
 		if !ok {
 			allResolved = false
-			return match // leave unexpanded; caller checks allResolved
+			return ""
 		}
 		return val
 	})

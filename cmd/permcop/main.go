@@ -88,6 +88,7 @@ func runCheck() {
 	}
 
 	logger := audit.New(cfg.Defaults.LogFile, cfg.Defaults.LogFormat)
+	defer logger.Close()
 
 	denyAndExit := func(reason string) {
 		_ = logger.Log(audit.Entry{
@@ -187,6 +188,7 @@ func runExplain(command string) {
 
 	// Null logger for explain (no file writes)
 	logger := audit.New(os.DevNull, "text")
+	defer logger.Close()
 	engine := rules.New(cfg, logger)
 
 	result, err := engine.Check(command, cwd)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mikecafarella/permcop/internal/parser"
@@ -22,20 +23,22 @@ const (
 
 // Entry captures everything about a single permission decision.
 type Entry struct {
-	Timestamp      time.Time
-	Decision       Decision
-	Reason         string
-	DecidingRule   string // name of the rule that made the call; empty if no rule matched
+	Timestamp       time.Time
+	Decision        Decision
+	Reason          string
+	DecidingRule    string // name of the rule that made the call; empty if no rule matched
 	DecidingPattern string // pattern string that matched; empty if safety check triggered
-	DecidingUnit   *parser.CheckableUnit // the specific unit that triggered the decision
+	DecidingUnit    *parser.CheckableUnit // the specific unit that triggered the decision
 	OriginalCommand string
-	Units          []parser.CheckableUnit
+	Units           []parser.CheckableUnit
 }
 
 // Logger writes audit entries to a file.
 type Logger struct {
 	path   string
 	format string // "text" or "json"
+	mu     sync.Mutex
+	file   *os.File // nil until first Log()
 }
 
 // New creates a Logger. The log file and its parent directories are created
@@ -49,17 +52,24 @@ func New(path, format string) *Logger {
 
 // Log writes an entry to the audit log.
 func (l *Logger) Log(e Entry) error {
-	if err := os.MkdirAll(filepath.Dir(l.path), 0700); err != nil {
-		return fmt.Errorf("create log dir: %w", err)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.file == nil {
+		if err := os.MkdirAll(filepath.Dir(l.path), 0700); err != nil {
+			return fmt.Errorf("create log dir: %w", err)
+		}
+		f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			return fmt.Errorf("open log: %w", err)
+		}
+		l.file = f
 	}
 
-	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("open log: %w", err)
-	}
-	defer f.Close()
-
-	var line string
+	var (
+		line string
+		err  error
+	)
 	if l.format == "json" {
 		line, err = jsonLine(e)
 	} else {
@@ -69,8 +79,21 @@ func (l *Logger) Log(e Entry) error {
 		return err
 	}
 
-	_, err = fmt.Fprintln(f, line)
+	_, err = fmt.Fprintln(l.file, line)
 	return err
+}
+
+// Close releases the underlying file handle. It is safe to call on a Logger
+// that has never written (no-op). After Close, the Logger may not be used.
+func (l *Logger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file != nil {
+		err := l.file.Close()
+		l.file = nil
+		return err
+	}
+	return nil
 }
 
 // textLine formats an entry as human-readable structured text.

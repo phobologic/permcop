@@ -108,7 +108,7 @@ func (l *Logger) Close() error {
 
 // textLine formats an entry as human-readable structured text.
 func textLine(e Entry) string {
-	ts := e.Timestamp.UTC().Format(time.RFC3339)
+	ts := e.Timestamp.Local().Format(time.RFC3339)
 
 	// Header line
 	var header strings.Builder
@@ -147,7 +147,11 @@ func textLine(e Entry) string {
 			if m.Action == "allow" {
 				sb.WriteString(fmt.Sprintf("    allow  [%s]  rule=%q  pattern=%q\n", m.Unit, m.Rule, m.Pattern))
 			} else if m.Rule == "" {
-				sb.WriteString(fmt.Sprintf("    deny   [%s]  (default deny)\n", m.Unit))
+				if e.Decision == DecisionPassThrough {
+					sb.WriteString(fmt.Sprintf("    pass   [%s]  (no rule — deferred to Claude Code)\n", m.Unit))
+				} else {
+					sb.WriteString(fmt.Sprintf("    deny   [%s]  (default deny)\n", m.Unit))
+				}
 			} else {
 				sb.WriteString(fmt.Sprintf("    deny   [%s]  rule=%q  pattern=%q\n", m.Unit, m.Rule, m.Pattern))
 			}
@@ -160,7 +164,7 @@ func textLine(e Entry) string {
 // jsonLine formats an entry as a single JSON object.
 func jsonLine(e Entry) (string, error) {
 	obj := map[string]interface{}{
-		"timestamp": e.Timestamp.UTC().Format(time.RFC3339),
+		"timestamp": e.Timestamp.Local().Format(time.RFC3339),
 		"decision":  string(e.Decision),
 	}
 	if e.DecidingRule != "" {

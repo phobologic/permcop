@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mikecafarella/permcop/internal/parser"
 )
 
 func TestLoggerMultipleWrites(t *testing.T) {
@@ -53,6 +55,80 @@ func TestLoggerMultipleWrites(t *testing.T) {
 	}
 	if !strings.Contains(content, "rm -rf /") {
 		t.Error("expected second command in log")
+	}
+}
+
+func TestTimestampUsesLocalOffset(t *testing.T) {
+	t.Parallel()
+
+	line := textLine(Entry{
+		Timestamp:       time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC),
+		Decision:        DecisionAllow,
+		OriginalCommand: "git status",
+	})
+
+	// The formatted timestamp must not end with bare "Z" — it should carry an offset.
+	// In UTC the offset is "+00:00", not "Z", when using .Local() on a UTC-zone time.
+	// We just check that the ISO-8601 offset separator appears and "Z" is absent as suffix.
+	parts := strings.SplitN(line, " ", 2)
+	ts := parts[0]
+	if strings.HasSuffix(ts, "Z") {
+		t.Errorf("timestamp %q ends with Z; want local offset (e.g. +00:00 or -05:00)", ts)
+	}
+	if !strings.ContainsAny(ts[len("2006-01-02T15:04:05"):], "+-") {
+		t.Errorf("timestamp %q missing UTC offset in local format", ts)
+	}
+}
+
+func TestPassEntryShowsPerUnitDetail(t *testing.T) {
+	t.Parallel()
+
+	units := []parser.CheckableUnit{
+		{Value: "git add ."},
+		{Value: "cat foo"},
+	}
+	matches := []RuleMatch{
+		{Rule: "git", Pattern: "git add *", Unit: "git add .", Action: "allow"},
+		{Rule: "", Pattern: "", Unit: "cat foo", Action: ""},
+	}
+
+	line := textLine(Entry{
+		Timestamp:       time.Now(),
+		Decision:        DecisionPassThrough,
+		Reason:          "no matching rule; deferred to Claude Code",
+		OriginalCommand: "git add . && cat foo",
+		Units:           units,
+		RuleMatches:     matches,
+	})
+
+	if !strings.Contains(line, "pass   [cat foo]  (no rule") {
+		t.Errorf("PASS entry missing pass label for uncovered unit; got:\n%s", line)
+	}
+	if strings.Contains(line, "(default deny)") {
+		t.Errorf("PASS entry should not contain '(default deny)'; got:\n%s", line)
+	}
+}
+
+func TestDenyEntryDefaultDenyLabel(t *testing.T) {
+	t.Parallel()
+
+	matches := []RuleMatch{
+		{Rule: "", Pattern: "", Unit: "rm -rf /", Action: ""},
+	}
+
+	line := textLine(Entry{
+		Timestamp:       time.Now(),
+		Decision:        DecisionDeny,
+		Reason:          "no matching rule",
+		OriginalCommand: "rm -rf /",
+		RuleMatches:     matches,
+	})
+
+	if !strings.Contains(line, "(default deny)") {
+		t.Errorf("DENY entry missing '(default deny)'; got:\n%s", line)
+	}
+	if strings.Contains(line, "(no rule") {
+		t.Errorf("DENY entry should not contain '(no rule'; got:\n%s", line)
 	}
 }
 

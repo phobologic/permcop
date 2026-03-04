@@ -228,6 +228,8 @@ func runCheck() {
 			Decision:        audit.DecisionPassThrough,
 			Reason:          "no matching rule; deferred to Claude Code",
 			OriginalCommand: result.OriginalCommand,
+			Units:           result.Units,
+			RuleMatches:     result.RuleMatches,
 		})
 		os.Exit(0)
 	}

@@ -255,7 +255,11 @@ func runExplain(command string) {
 // runValidate parses the config file and reports any errors.
 func runValidate(path string) {
 	if path == "" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
+			os.Exit(1)
+		}
 		path = filepath.Join(home, ".config", "permcop", "config.toml")
 	}
 
@@ -279,7 +283,11 @@ func runValidate(path string) {
 
 // runInit sets up the Claude Code hook and creates a starter config.
 func runInit() {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
+		os.Exit(1)
+	}
 
 	// 1. Create starter config
 	cfgDir := filepath.Join(home, ".config", "permcop")
@@ -425,7 +433,11 @@ func addHookToSettings(path string) error {
 // If --append is passed as the second argument, the output is appended to the
 // global permcop config file instead of being printed.
 func runImportClaudeSettings(settingsPath string) {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
+		os.Exit(1)
+	}
 	if settingsPath == "" {
 		settingsPath = filepath.Join(home, ".claude", "settings.json")
 	}

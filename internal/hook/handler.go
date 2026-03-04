@@ -17,7 +17,7 @@ const (
 	ToolWrite     ToolKind = "Write"
 	ToolEdit      ToolKind = "Edit"
 	ToolMultiEdit ToolKind = "MultiEdit"
-	ToolUnknown   ToolKind = ""
+	ToolUnknown   ToolKind = "unknown"
 )
 
 // Input is the raw hook JSON, decoded into the common envelope.

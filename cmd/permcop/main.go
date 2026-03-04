@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -419,6 +420,15 @@ func addHookToSettings(path string) error {
 		return err
 	}
 
+	// Capture the original file's permissions so we can restore them on the
+	// replacement. Claude's settings.json may contain sensitive data (API keys,
+	// hook commands), so we preserve whatever restricted mode was set. If the
+	// file does not exist yet, default to 0600 (owner read/write only).
+	origMode := fs.FileMode(0600)
+	if fi, err := os.Stat(path); err == nil {
+		origMode = fi.Mode()
+	}
+
 	// Write atomically: temp file in the same directory, then rename.
 	// os.Rename is atomic on POSIX when src and dst share a filesystem,
 	// preventing corruption if the process is interrupted mid-write.
@@ -436,6 +446,10 @@ func addHookToSettings(path string) error {
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Chmod(tmpName, origMode); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)

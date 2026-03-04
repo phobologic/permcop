@@ -27,23 +27,16 @@ make cover      # coverage report → coverage.html
 
 - **Deny by default** — no config or no matching rule = deny. Never silently allow.
 - **Fail-closed** — config errors, parse errors, unknown hook formats all → deny + audit log.
-- **Two-pass engine** — Pass 1: deny scan (any deny match = immediate deny). Pass 2: allow scan (all units must be covered by a single rule). See `internal/rules/engine.go`.
-- **Single-rule coverage** — all parsed units of a command must be covered by ONE rule's allow patterns. Cross-rule allow splitting is intentionally not supported (security property).
+- **Two-pass engine** — Pass 1: deny scan (any deny match = immediate deny). Pass 2: allow scan (each unit independently finds any covering rule; all units must be covered). See `internal/rules/engine.go`.
+- **Per-unit coverage** — each unit in a command independently finds any rule that covers it; different units can be covered by different rules. A "write zone" rule can cover write units across many command rules.
 - **Shell parsing** — use `mvdan.cc/sh/v3` for AST parsing, never regex-split commands.
-- **Pattern types** — `exact`, `prefix`, `glob`, `regex`. Bare strings in config default to `glob`.
+- **`expand_variables`** — per-rule opt-in; resolves `$VAR`/`${VAR}` from env before matching. Fail-closed: if any variable is missing from env, that rule cannot cover the unit. `CheckableUnit.Variables []string` tracks variable names found (without `$`).
 
 ## Config locations
 
 - Global: `~/.config/permcop/config.toml`
 - Per-project: `.permcop.toml` (searched from CWD upward to home; project rules prepend global rules)
 - Audit log: `~/.local/share/permcop/audit.log` (default)
-
-## Testing
-
-- Table-driven tests, stdlib `testing` only
-- Use `t.TempDir()` for filesystem isolation
-- No external services, no network calls
-- Run `go test -race ./...` — race detector is always on in CI
 
 ## Go conventions
 

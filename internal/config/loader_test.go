@@ -189,3 +189,45 @@ allow = ["git status", "git log"]
 		}
 	}
 }
+
+func TestLoadFile_ExpandVariables(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "expand rule"
+expand_variables = true
+allow = ["mv * /tmp/*"]
+`)
+
+	cfg, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(cfg.Rules))
+	}
+	if !cfg.Rules[0].ExpandVariables {
+		t.Error("expected ExpandVariables=true, got false")
+	}
+}
+
+func TestLoadFile_ExpandVariables_DefaultFalse(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "no expand"
+allow = ["git status"]
+`)
+
+	cfg, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if cfg.Rules[0].ExpandVariables {
+		t.Error("expected ExpandVariables=false by default, got true")
+	}
+}

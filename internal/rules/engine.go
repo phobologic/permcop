@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,11 +24,29 @@ type Result struct {
 type Engine struct {
 	cfg    *config.Config
 	logger *audit.Logger
+	env    map[string]string // variable environment for expand_variables; nil = use os.Environ()
 }
 
-// New creates an Engine.
+// New creates an Engine using the process environment for variable expansion.
 func New(cfg *config.Config, logger *audit.Logger) *Engine {
-	return &Engine{cfg: cfg, logger: logger}
+	return &Engine{cfg: cfg, logger: logger, env: osEnvMap()}
+}
+
+// NewWithEnv creates an Engine with an explicit environment map, primarily for testing.
+func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string) *Engine {
+	return &Engine{cfg: cfg, logger: logger, env: env}
+}
+
+// osEnvMap converts os.Environ() into a map for fast lookup.
+func osEnvMap() map[string]string {
+	raw := os.Environ()
+	m := make(map[string]string, len(raw))
+	for _, kv := range raw {
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			m[kv[:i]] = kv[i+1:]
+		}
+	}
+	return m
 }
 
 // Check evaluates command (the raw string from Claude Code) against the rule set.
@@ -92,9 +111,18 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 	for i := range e.cfg.Rules {
 		r := &e.cfg.Rules[i]
 		for j := range parsed.Units {
-			u := &parsed.Units[j]
-			if matched, patStr := matchesDenyPattern(r, u); matched {
-				return deny("matched deny pattern", r.Name, patStr, u)
+			u := parsed.Units[j] // copy; may be modified by expansion
+			if r.ExpandVariables && u.HasVariable {
+				expanded, ok := expandVars(u.Value, e.env)
+				if !ok {
+					// Variable not in env — skip this rule for this unit (not a deny).
+					continue
+				}
+				u.Value = expanded
+				u.HasVariable = false
+			}
+			if matched, patStr := matchesDenyPattern(r, &u); matched {
+				return deny("matched deny pattern", r.Name, patStr, &u)
 			}
 		}
 	}
@@ -106,11 +134,24 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 	var warnReason string
 
 	for i := range parsed.Units {
-		u := &parsed.Units[i]
+		orig := &parsed.Units[i]
 		covered := false
 
 		for j := range e.cfg.Rules {
 			r := &e.cfg.Rules[j]
+
+			u := *orig // copy; may be modified by expansion
+
+			// expand_variables: resolve env vars before matching this rule.
+			if r.ExpandVariables && u.HasVariable {
+				expanded, ok := expandVars(u.Value, e.env)
+				if !ok {
+					// Variable not in env — this rule cannot cover the unit.
+					continue
+				}
+				u.Value = expanded
+				u.HasVariable = false
+			}
 
 			// Subshell: this rule's effective setting determines if it can cover the unit.
 			if e.cfg.EffectiveDenySubshells(r) && u.HasSubshell {
@@ -123,8 +164,8 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				continue
 			}
 
-			if ok, pat := unitCoveredByRule(e.cfg, r, *u); ok {
-				lastUnit = u
+			if ok, pat := unitCoveredByRule(e.cfg, r, u); ok {
+				lastUnit = orig
 				lastPat = pat
 				lastRule = r.Name
 				covered = true
@@ -136,7 +177,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 		}
 
 		if !covered {
-			return deny("no matching allow rule", "", "", u)
+			return deny("no matching allow rule", "", "", orig)
 		}
 	}
 
@@ -287,6 +328,33 @@ func matchGlobPath(pattern, path string) bool {
 
 func patternString(p config.Pattern) string {
 	return fmt.Sprintf("%s:%s", p.Type, p.Pattern)
+}
+
+// expandVars replaces $VAR and ${VAR} occurrences in s using env.
+// Returns (expanded, true) if all variables were resolved, or ("", false) if
+// any variable was missing from env.
+func expandVars(s string, env map[string]string) (string, bool) {
+	// Match ${VAR} and $VAR (identifiers: [A-Za-z_][A-Za-z0-9_]*)
+	re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+	allResolved := true
+	result := re.ReplaceAllStringFunc(s, func(match string) string {
+		// Extract variable name from either ${VAR} or $VAR form.
+		sub := re.FindStringSubmatch(match)
+		name := sub[1]
+		if name == "" {
+			name = sub[2]
+		}
+		val, ok := env[name]
+		if !ok {
+			allResolved = false
+			return match // leave unexpanded; caller checks allResolved
+		}
+		return val
+	})
+	if !allResolved {
+		return "", false
+	}
+	return result, true
 }
 
 func hasSudo(command string) bool {

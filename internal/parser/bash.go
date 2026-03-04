@@ -24,8 +24,9 @@ type CheckableUnit struct {
 	// For UnitCommand: the full command string (e.g., "git push origin main")
 	// For UnitReadFile/UnitWriteFile: the file path
 	Value       string
-	HasVariable bool // true if any $VAR or ${VAR} was found in the value
-	HasSubshell bool // true if any $(...) or backtick subshell was found
+	HasVariable bool     // true if any $VAR or ${VAR} was found in the value
+	Variables   []string // names of variables found (without $), e.g. ["TARGET", "HOME"]
+	HasSubshell bool     // true if any $(...) or backtick subshell was found
 }
 
 // ParseResult is the output of parsing a full command string.
@@ -85,6 +86,7 @@ func (v *visitor) handleCallExpr(n *syntax.CallExpr) {
 	for _, word := range n.Args {
 		part, flags := wordToString(word, v.cwd, v.maxDepth-1)
 		combined.hasVariable = combined.hasVariable || flags.hasVariable
+		combined.variables = append(combined.variables, flags.variables...)
 		combined.hasSubshell = combined.hasSubshell || flags.hasSubshell
 		parts = append(parts, part)
 	}
@@ -93,6 +95,7 @@ func (v *visitor) handleCallExpr(n *syntax.CallExpr) {
 		Kind:        UnitCommand,
 		Value:       strings.Join(parts, " "),
 		HasVariable: combined.hasVariable,
+		Variables:   combined.variables,
 		HasSubshell: combined.hasSubshell,
 	}
 	v.units = append(v.units, unit)
@@ -128,6 +131,7 @@ func (v *visitor) handleRedirect(n *syntax.Redirect) {
 		Kind:        kind,
 		Value:       path,
 		HasVariable: flags.hasVariable,
+		Variables:   flags.variables,
 		HasSubshell: flags.hasSubshell,
 	})
 }
@@ -160,6 +164,7 @@ func (v *visitor) walkSubshellsInWord(word *syntax.Word, depth int) {
 // wordFlags carries what was found during word-to-string conversion.
 type wordFlags struct {
 	hasVariable bool
+	variables   []string // variable names collected (without $)
 	hasSubshell bool
 }
 
@@ -177,10 +182,12 @@ func wordToString(word *syntax.Word, cwd string, remainingDepth int) (string, wo
 		case *syntax.DblQuoted:
 			inner, innerFlags := dblQuotedToString(p, cwd, remainingDepth)
 			flags.hasVariable = flags.hasVariable || innerFlags.hasVariable
+			flags.variables = append(flags.variables, innerFlags.variables...)
 			flags.hasSubshell = flags.hasSubshell || innerFlags.hasSubshell
 			sb.WriteString(inner)
 		case *syntax.ParamExp: // $VAR or ${VAR}
 			flags.hasVariable = true
+			flags.variables = append(flags.variables, p.Param.Value)
 			sb.WriteString("$" + p.Param.Value)
 		case *syntax.CmdSubst: // $(...)
 			flags.hasSubshell = true
@@ -207,6 +214,7 @@ func dblQuotedToString(dq *syntax.DblQuoted, cwd string, remainingDepth int) (st
 			sb.WriteString(p.Value)
 		case *syntax.ParamExp:
 			flags.hasVariable = true
+			flags.variables = append(flags.variables, p.Param.Value)
 			sb.WriteString("$" + p.Param.Value)
 		case *syntax.CmdSubst:
 			flags.hasSubshell = true

@@ -8,10 +8,10 @@ func TestParse(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		command  string
+		name      string
+		command   string
 		wantUnits []CheckableUnit
-		wantErr  bool
+		wantErr   bool
 	}{
 		{
 			name:    "simple command",
@@ -163,6 +163,72 @@ func TestParse(t *testing.T) {
 				}
 				if got.HasSubshell != want.HasSubshell {
 					t.Errorf("unit[%d] HasSubshell: got %v, want %v", i, got.HasSubshell, want.HasSubshell)
+				}
+			}
+		})
+	}
+}
+
+func TestParse_VariableNames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		command   string
+		wantVars  []string // expected Variables on the first unit
+		wantCount int      // expected number of units
+	}{
+		{
+			name:      "single variable",
+			command:   "mv $TARGET /tmp/out",
+			wantVars:  []string{"TARGET"},
+			wantCount: 1,
+		},
+		{
+			name:      "braced variable",
+			command:   "cp ${SRC} /dst",
+			wantVars:  []string{"SRC"},
+			wantCount: 1,
+		},
+		{
+			name:      "multiple variables",
+			command:   "cp $SRC $DST",
+			wantVars:  []string{"SRC", "DST"},
+			wantCount: 1,
+		},
+		{
+			name:      "variable in double-quoted string",
+			command:   `echo "hello $USER"`,
+			wantVars:  []string{"USER"},
+			wantCount: 1,
+		},
+		{
+			name:      "no variables",
+			command:   "git status",
+			wantVars:  nil,
+			wantCount: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := Parse(tc.command, "/tmp", 3)
+			if result.ParseError != nil {
+				t.Fatalf("unexpected parse error: %v", result.ParseError)
+			}
+			if len(result.Units) != tc.wantCount {
+				t.Fatalf("got %d units, want %d", len(result.Units), tc.wantCount)
+			}
+			got := result.Units[0].Variables
+			if len(got) != len(tc.wantVars) {
+				t.Fatalf("Variables: got %v, want %v", got, tc.wantVars)
+			}
+			for i, name := range tc.wantVars {
+				if got[i] != name {
+					t.Errorf("Variables[%d]: got %q, want %q", i, got[i], name)
 				}
 			}
 		})

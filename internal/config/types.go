@@ -72,6 +72,11 @@ type Rule struct {
 	// allow patterns. Useful for rules that should only match literal commands
 	// with no shell interpretation.
 	DenySubshells *bool `toml:"deny_subshells"`
+	// ExpandVariables, when true, causes the engine to resolve environment
+	// variables in a unit's value before matching this rule's allow and deny
+	// patterns. If any variable in the unit is not set in the environment,
+	// this rule cannot cover the unit (fail-closed). Defaults to false.
+	ExpandVariables bool `toml:"expand_variables"`
 }
 
 // EffectiveDenySubshells returns whether subshells should be denied,

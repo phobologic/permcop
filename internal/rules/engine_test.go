@@ -11,6 +11,26 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
+func newTestEngineWithEnv(t *testing.T, rules []config.Rule, defaults *config.Defaults, env map[string]string) *Engine {
+	t.Helper()
+	cfg := &config.Config{Rules: rules}
+	if defaults != nil {
+		cfg.Defaults = *defaults
+	}
+	if cfg.Defaults.SubshellDepthLimit == 0 {
+		cfg.Defaults.SubshellDepthLimit = 3
+	}
+	if cfg.Defaults.UnknownVariableAction == "" {
+		cfg.Defaults.UnknownVariableAction = config.VariableActionDeny
+	}
+	logPath := cfg.Defaults.LogFile
+	if logPath == "" {
+		logPath = os.DevNull
+	}
+	logger := audit.New(logPath, cfg.Defaults.LogFormat)
+	return NewWithEnv(cfg, logger, env)
+}
+
 func newTestEngine(t *testing.T, rules []config.Rule, defaults *config.Defaults) *Engine {
 	t.Helper()
 	cfg := &config.Config{Rules: rules}
@@ -496,5 +516,184 @@ func TestEngine_ReadFileRuleWithConfigFile(t *testing.T) {
 	r2, _ := e.Check("cat < /etc/passwd", "/tmp")
 	if r2.Allowed {
 		t.Error("expected DENY for read outside allowed dir, got ALLOW")
+	}
+}
+
+// --- expand_variables tests ---
+
+func TestEngine_ExpandVariables_Allow(t *testing.T) {
+	t.Parallel()
+
+	// $TARGET expands to /tmp/safe.txt; rule allows "mv * /tmp/*".
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:            "mv to tmp",
+			ExpandVariables: true,
+			Allow:           []config.Pattern{{Type: config.PatternGlob, Pattern: "mv * /tmp/*"}},
+		},
+	}, nil, map[string]string{"TARGET": "/tmp/safe.txt"})
+
+	r, err := e.Check("mv $TARGET /tmp/out.txt", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Allowed {
+		t.Errorf("expected ALLOW after expansion, got DENY: %s", r.Reason)
+	}
+}
+
+func TestEngine_ExpandVariables_DenyViaDenyPattern(t *testing.T) {
+	t.Parallel()
+
+	// $DIR expands to /home/user; deny pattern should catch it after expansion.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:            "rm in tmp only",
+			ExpandVariables: true,
+			Allow:           []config.Pattern{{Type: config.PatternGlob, Pattern: "rm *"}},
+			Deny:            []config.Pattern{{Type: config.PatternGlob, Pattern: "rm -rf /home/**"}},
+		},
+	}, nil, map[string]string{"DIR": "/home/user"})
+
+	r, err := e.Check("rm -rf $DIR", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Allowed {
+		t.Errorf("expected DENY (expanded deny pattern matched), got ALLOW")
+	}
+}
+
+func TestEngine_ExpandVariables_MissingVar_FailClosed(t *testing.T) {
+	t.Parallel()
+
+	// Variable not in env → rule can't cover → deny.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:            "mv anywhere",
+			ExpandVariables: true,
+			Allow:           []config.Pattern{{Type: config.PatternGlob, Pattern: "mv *"}},
+		},
+	}, nil, map[string]string{} /* empty env */)
+
+	r, err := e.Check("mv $TARGET /tmp/out", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Allowed {
+		t.Errorf("expected DENY (missing var fail-closed), got ALLOW")
+	}
+}
+
+func TestEngine_ExpandVariables_NoExpansionWithoutFlag(t *testing.T) {
+	t.Parallel()
+
+	// Rule does NOT have expand_variables; variable command is denied by default
+	// (unknown_variable_action = deny).
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:  "mv anywhere",
+			Allow: []config.Pattern{{Type: config.PatternGlob, Pattern: "mv *"}},
+		},
+	}, nil, map[string]string{"TARGET": "/tmp/safe.txt"})
+
+	r, err := e.Check("mv $TARGET /tmp/out", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Allowed {
+		t.Errorf("expected DENY (no expand_variables, variable triggers deny), got ALLOW")
+	}
+}
+
+func TestEngine_ExpandVariables_BracedVar(t *testing.T) {
+	t.Parallel()
+
+	// ${SRC} form should expand the same as $SRC.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:            "cp to tmp",
+			ExpandVariables: true,
+			Allow:           []config.Pattern{{Type: config.PatternGlob, Pattern: "cp /data/* /tmp/*"}},
+		},
+	}, nil, map[string]string{"SRC": "/data/file.txt"})
+
+	r, err := e.Check("cp ${SRC} /tmp/file.txt", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Allowed {
+		t.Errorf("expected ALLOW for braced var expansion, got DENY: %s", r.Reason)
+	}
+}
+
+func TestEngine_ExpandVariables_MultipleVars_AllResolved(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:            "cp files",
+			ExpandVariables: true,
+			Allow:           []config.Pattern{{Type: config.PatternGlob, Pattern: "cp /src/* /dst/*"}},
+		},
+	}, nil, map[string]string{"SRC": "/src/a.txt", "DST": "/dst/b.txt"})
+
+	r, err := e.Check("cp $SRC $DST", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Allowed {
+		t.Errorf("expected ALLOW for both vars resolved, got DENY: %s", r.Reason)
+	}
+}
+
+func TestEngine_ExpandVariables_MultipleVars_OneUnresolved(t *testing.T) {
+	t.Parallel()
+
+	// SRC is set but DST is not — fail-closed.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:            "cp files",
+			ExpandVariables: true,
+			Allow:           []config.Pattern{{Type: config.PatternGlob, Pattern: "cp *"}},
+		},
+	}, nil, map[string]string{"SRC": "/src/a.txt"} /* DST missing */)
+
+	r, err := e.Check("cp $SRC $DST", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Allowed {
+		t.Errorf("expected DENY (DST unresolved, fail-closed), got ALLOW")
+	}
+}
+
+func TestEngine_ExpandVariables_FallbackToOtherRule(t *testing.T) {
+	t.Parallel()
+
+	// Rule 1: expand_variables=true, var not in env → can't cover.
+	// Rule 2: no expand, unknown_variable_action=allow → covers.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:            "strict mv",
+			ExpandVariables: true,
+			Allow:           []config.Pattern{{Type: config.PatternGlob, Pattern: "mv /tmp/*"}},
+		},
+		{
+			Name:           "permissive mv",
+			Allow:          []config.Pattern{{Type: config.PatternGlob, Pattern: "mv *"}},
+			VariableAction: config.VariableActionAllow,
+		},
+	}, nil, map[string]string{} /* empty env */)
+
+	r, err := e.Check("mv $TARGET /tmp/out", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Allowed {
+		t.Errorf("expected ALLOW via fallback rule, got DENY: %s", r.Reason)
+	}
+	if r.DecidingRule != "permissive mv" {
+		t.Errorf("expected deciding rule 'permissive mv', got %q", r.DecidingRule)
 	}
 }

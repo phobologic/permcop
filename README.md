@@ -38,7 +38,7 @@ subshell_depth_limit = 3
 
 # Rules are evaluated in order.
 # Pass 1: ANY deny pattern matching ANY unit → DENY immediately.
-# Pass 2: ALL units must be covered by ONE rule's allow patterns → ALLOW.
+# Pass 2: each unit independently finds any rule that covers it; all must be covered → ALLOW.
 # No match → DENY.
 
 [[rules]]
@@ -78,13 +78,30 @@ Bare strings default to `glob`. Pattern types apply to command strings; file pat
 
 ### Variable and subshell handling
 
-Commands containing `$VAR` or `$(...)` can't be safely evaluated at check time. Behavior is configurable:
+Commands containing `$VAR` or `$(...)` present an evaluation challenge because permcop can't know the runtime value at check time. Two mechanisms address this:
+
+**`unknown_variable_action`** — controls what happens when a rule encounters a command with unresolved variables:
 
 - `unknown_variable_action = "deny"` — reject the command (default, most secure)
 - `unknown_variable_action = "warn"` — allow but write a WARN-level audit entry
 - `unknown_variable_action = "allow"` — permit silently
 
-Override per rule with `unknown_variable_action = "warn"`. Similarly, `deny_subshells = true` blocks any command containing `$(...)` subshells.
+Set globally in `[defaults]` or override per rule.
+
+**`expand_variables = true`** (per-rule) — resolves `$VAR` and `${VAR}` from the environment before matching this rule's patterns. This lets you write precise allow/deny rules against actual expanded values:
+
+```toml
+[[rules]]
+name = "Allow mv of $TARGET to /tmp"
+expand_variables = true
+allow = [{ type = "glob", pattern = "mv * /tmp/*" }]
+```
+
+With this rule, `mv $TARGET /tmp/out.txt` is checked as `mv /home/user/data.txt /tmp/out.txt` after resolving `TARGET` from the environment. Expansion applies to both deny and allow patterns for the rule — a deny pattern like `deny = ["mv * /home/**"]` will catch an expanded value that resolves into `/home/`.
+
+If a variable is not set in the environment, the rule cannot cover the unit (fail-closed). Other rules without `expand_variables` still apply normally as fallbacks.
+
+Similarly, `deny_subshells = true` blocks any command containing `$(...)` subshells.
 
 ### Per-unit coverage
 

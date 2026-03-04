@@ -168,12 +168,20 @@ func exitWithResult(result *rules.Result) {
 	os.Exit(2)
 }
 
-// absolutePath resolves a path relative to cwd if it isn't already absolute.
+// absolutePath resolves a path relative to cwd, then canonicalizes it by
+// evaluating symlinks so that glob rules anchored to the project directory
+// cannot be bypassed via symlinks or .. sequences.
 func absolutePath(path, cwd string) string {
-	if filepath.IsAbs(path) {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(cwd, path)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		// Path may not exist yet (e.g. a new file being written); return the
+		// lexically-cleaned absolute path so deny-by-default still applies.
 		return path
 	}
-	return filepath.Join(cwd, path)
+	return resolved
 }
 
 // runExplain performs a dry-run evaluation and prints a human-readable trace.

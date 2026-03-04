@@ -558,6 +558,29 @@ func TestApplyDefaults_HomeDirError(t *testing.T) {
 	}
 }
 
+func TestApplyDefaults_LogFileOutsideHome(t *testing.T) {
+	cfg := &Config{Defaults: Defaults{LogFile: "/etc/cron.d/permcop"}}
+	err := applyDefaults(cfg)
+	if err == nil {
+		t.Fatal("expected error for log_file outside home directory, got nil")
+	}
+	if !strings.Contains(err.Error(), "log_file") {
+		t.Errorf("error should mention log_file, got: %v", err)
+	}
+}
+
+func TestApplyDefaults_LogFileInsideHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home directory")
+	}
+	logPath := filepath.Join(home, "custom", "audit.log")
+	cfg := &Config{Defaults: Defaults{LogFile: logPath}}
+	if err := applyDefaults(cfg); err != nil {
+		t.Errorf("expected no error for log_file inside home, got: %v", err)
+	}
+}
+
 func TestPatternUnmarshal_UnknownType(t *testing.T) {
 	t.Parallel()
 

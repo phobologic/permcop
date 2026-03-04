@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -201,12 +202,17 @@ func applyDefaults(cfg *Config) error {
 	if cfg.Defaults.SubshellDepthLimit == 0 {
 		cfg.Defaults.SubshellDepthLimit = 3
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("home directory: %w", err)
+	}
 	if cfg.Defaults.LogFile == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("home directory: %w", err)
-		}
 		cfg.Defaults.LogFile = filepath.Join(home, ".local", "share", "permcop", "audit.log")
+	} else {
+		clean := filepath.Clean(cfg.Defaults.LogFile)
+		if !strings.HasPrefix(clean, home+string(filepath.Separator)) {
+			return fmt.Errorf("log_file %q must be inside the user home directory; project configs may not redirect the audit log to system paths", cfg.Defaults.LogFile)
+		}
 	}
 	return nil
 }

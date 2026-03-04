@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +32,8 @@ Usage:
   permcop init [--global]                         Set up Claude Code hook and create config
   permcop import-claude-settings [--global] [--shared] [--dry-run] [file]
                                                   Import Claude Code permissions to permcop TOML
+  permcop suggest [--n N] [--global] [--shared] [--dry-run]
+                                                  Propose rules for commands with no matching rule
   permcop version                                 Print version
   permcop help                                    Show this help message
 
@@ -78,6 +83,28 @@ Examples:
   permcop import-claude-settings --global --dry-run
 `
 
+const usageSuggest = `permcop suggest — Propose rules for commands that had no matching rule
+
+Usage:
+  permcop suggest [--n N] [--global] [--shared] [--dry-run] [--log path]
+
+Flags:
+  --n N       Number of recent unmatched commands to surface (default: 20)
+  --global    Use global config scope (~/.config/permcop/) instead of project
+  --shared    Write to the shared (committed) config instead of the local variant
+  --dry-run   Print generated TOML to stdout; do not open editor or write
+  --log path  Override audit log path
+  --help      Show this help message
+
+Default destination (no flags): .permcop.local.toml in CWD
+
+Examples:
+  permcop suggest              # interactive: pick commands, edit rules, confirm
+  permcop suggest --dry-run    # preview generated TOML for all recent misses
+  permcop suggest --n 50       # surface last 50 unmatched commands
+  permcop suggest --global     # target global config
+`
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
@@ -112,6 +139,8 @@ func main() {
 	case "init":
 		global := len(os.Args) >= 3 && os.Args[2] == "--global"
 		runInit(global)
+	case "suggest":
+		runSuggest(os.Args[2:])
 	case "import-claude-settings":
 		var global, dryRun, shared bool
 		var sourcePath string
@@ -438,8 +467,16 @@ func runInit(global bool) {
 	fmt.Printf("Config path: %s\n", cfgPath)
 
 	// 2. Create starter config if not present
+	logFile := "~/.local/share/permcop/audit.log"
+	if !global {
+		base := filepath.Base(cwd)
+		if base == "" || base == "." {
+			base = "project"
+		}
+		logFile = fmt.Sprintf("~/.local/share/permcop/projects/%s/audit.log", base)
+	}
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-		if err := os.WriteFile(cfgPath, []byte(starterConfig), 0600); err != nil {
+		if err := os.WriteFile(cfgPath, []byte(starterConfigFor(logFile)), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "write config: %v\n", err)
 			os.Exit(1)
 		}
@@ -817,6 +854,366 @@ func confirmAppend(destPath, content string) bool {
 	var resp string
 	fmt.Scanln(&resp)
 	return strings.ToLower(strings.TrimSpace(resp)) == "y"
+}
+
+// runSuggest reads recent PASS entries from the audit log, lets the user pick
+// which commands to convert to rules, opens $EDITOR for each draft, and appends
+// confirmed rules to the appropriate config file.
+func runSuggest(args []string) {
+	n := 20
+	var global, dryRun, shared bool
+	var logOverride string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--global":
+			global = true
+		case arg == "--shared":
+			shared = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--help" || arg == "-h":
+			fmt.Fprint(os.Stdout, usageSuggest)
+			os.Exit(0)
+		case arg == "--n":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "error: --n requires a value")
+				os.Exit(1)
+			}
+			i++
+			if _, err := fmt.Sscan(args[i], &n); err != nil || n <= 0 {
+				fmt.Fprintln(os.Stderr, "error: --n must be a positive integer")
+				os.Exit(1)
+			}
+		case strings.HasPrefix(arg, "--n="):
+			val := strings.TrimPrefix(arg, "--n=")
+			if _, err := fmt.Sscan(val, &n); err != nil || n <= 0 {
+				fmt.Fprintln(os.Stderr, "error: --n must be a positive integer")
+				os.Exit(1)
+			}
+		case arg == "--log":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "error: --log requires a value")
+				os.Exit(1)
+			}
+			i++
+			logOverride = args[i]
+		case strings.HasPrefix(arg, "--log="):
+			logOverride = strings.TrimPrefix(arg, "--log=")
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintf(os.Stderr, "unknown flag: %s\n\n%s", arg, usageSuggest)
+			os.Exit(1)
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "working directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Determine audit log path.
+	logPath := logOverride
+	if logPath == "" {
+		cfg, cfgErr := config.Load(cwd)
+		if cfgErr == nil {
+			logPath = cfg.Defaults.LogFile
+		}
+		if logPath == "" {
+			logPath = filepath.Join(home, ".local", "share", "permcop", "audit.log")
+		}
+	}
+
+	// Determine dest config path (same logic as import-claude-settings).
+	var destPath string
+	switch {
+	case global && shared:
+		destPath = filepath.Join(home, ".config", "permcop", "config.toml")
+	case global:
+		destPath = filepath.Join(home, ".config", "permcop", "config.local.toml")
+	case shared:
+		destPath = filepath.Join(cwd, ".permcop.toml")
+	default:
+		destPath = filepath.Join(cwd, ".permcop.local.toml")
+	}
+
+	// Read PASS entries.
+	entries, err := audit.ReadPASSEntries(logPath, n)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read audit log: %v\n", err)
+		os.Exit(1)
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(os.Stderr, "No unmatched commands found in the audit log.")
+		return
+	}
+
+	// Deduplicate by OriginalCommand, most-recent-first.
+	type cmdEntry struct {
+		command  string
+		count    int
+		lastSeen time.Time
+	}
+	seen := map[string]*cmdEntry{}
+	var ordered []string
+	for _, e := range entries {
+		cmd := e.OriginalCommand
+		if s, ok := seen[cmd]; ok {
+			s.count++
+			if e.Timestamp.After(s.lastSeen) {
+				s.lastSeen = e.Timestamp
+			}
+		} else {
+			seen[cmd] = &cmdEntry{command: cmd, count: 1, lastSeen: e.Timestamp}
+			ordered = append(ordered, cmd)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return seen[ordered[i]].lastSeen.After(seen[ordered[j]].lastSeen)
+	})
+
+	// Display list.
+	fmt.Println("Commands deferred to Claude Code (no permcop rule matched):")
+	fmt.Println()
+	for i, cmd := range ordered {
+		s := seen[cmd]
+		fmt.Printf("  %2d.  %-45s %d×  last seen %s\n",
+			i+1, cmd, s.count, timeAgo(s.lastSeen))
+	}
+	fmt.Println()
+
+	if dryRun {
+		fmt.Println("# Generated rules (dry-run):")
+		fmt.Println()
+		for _, cmd := range ordered {
+			rule := suggestRule(cmd)
+			fmt.Print(importer.RulesToTOML([]config.Rule{rule}))
+		}
+		return
+	}
+
+	// Prompt for selection.
+	fmt.Printf("Add rules for [1-%d, all, none]: ", len(ordered))
+	reader := bufio.NewReader(os.Stdin)
+	selInput, _ := reader.ReadString('\n')
+	selInput = strings.TrimSpace(selInput)
+
+	selected := parseSelection(selInput, len(ordered))
+	if len(selected) == 0 {
+		fmt.Fprintln(os.Stderr, "No commands selected.")
+		return
+	}
+
+	// For each selected command: generate TOML, open editor, confirm.
+	var confirmedTOML []string
+	for _, idx := range selected {
+		cmd := ordered[idx-1]
+		rule := suggestRule(cmd)
+		tomlContent := importer.RulesToTOML([]config.Rule{rule})
+
+		// Write draft to temp file.
+		tmp, err := os.CreateTemp("", "permcop-suggest-*.toml")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "create temp file: %v\n", err)
+			continue
+		}
+		tmpName := tmp.Name()
+		header := fmt.Sprintf("# Suggested rule for: %s\n# Edit as needed, then save and quit.\n\n", cmd)
+		if _, err := fmt.Fprint(tmp, header+tomlContent); err != nil {
+			tmp.Close()
+			os.Remove(tmpName)
+			fmt.Fprintf(os.Stderr, "write temp file: %v\n", err)
+			continue
+		}
+		tmp.Close()
+
+		// Open $EDITOR.
+		editorBin := os.Getenv("EDITOR")
+		if editorBin == "" {
+			editorBin = "vi"
+		}
+		edCmd := exec.Command(editorBin, tmpName)
+		edCmd.Stdin = os.Stdin
+		edCmd.Stdout = os.Stdout
+		edCmd.Stderr = os.Stderr
+		if err := edCmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "editor exited with error: %v\n", err)
+		}
+
+		// Read back edited content.
+		content, err := os.ReadFile(tmpName)
+		os.Remove(tmpName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read temp file: %v\n", err)
+			continue
+		}
+		edited := stripSuggestHeader(string(content))
+		if strings.TrimSpace(edited) == "" {
+			fmt.Fprintln(os.Stderr, "Empty content; skipping.")
+			continue
+		}
+
+		// Show diff and confirm.
+		if confirmAppend(destPath, edited) {
+			confirmedTOML = append(confirmedTOML, edited)
+		}
+	}
+
+	if len(confirmedTOML) == 0 {
+		return
+	}
+
+	// Append all confirmed rules in one write.
+	if err := os.MkdirAll(filepath.Dir(destPath), 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "create config dir: %v\n", err)
+		os.Exit(1)
+	}
+	f, err := os.OpenFile(destPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open %s: %v\n", destPath, err)
+		os.Exit(1)
+	}
+	defer f.Close()
+	for _, content := range confirmedTOML {
+		if _, err := fmt.Fprint(f, "\n"+content); err != nil {
+			fmt.Fprintf(os.Stderr, "write %s: %v\n", destPath, err)
+			os.Exit(1)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Wrote %d rule(s) to %s\n", len(confirmedTOML), destPath)
+
+	if !global && !shared {
+		offerGitignore(cwd, ".permcop.local.toml")
+	}
+}
+
+// suggestRule generates a draft permcop Rule for the given command.
+func suggestRule(command string) config.Rule {
+	tokens := strings.Fields(command)
+	var name string
+	var pattern config.Pattern
+
+	switch {
+	case len(tokens) == 0:
+		name = "Allow command"
+		pattern = config.Pattern{Type: config.PatternExact, Pattern: command}
+	case len(tokens) <= 2:
+		name = "Allow " + strings.Join(tokens, " ")
+		pattern = config.Pattern{Type: config.PatternExact, Pattern: command}
+	default:
+		name = "Allow " + tokens[0] + " " + tokens[1]
+		pattern = config.Pattern{Type: config.PatternGlob, Pattern: tokens[0] + " " + tokens[1] + " *"}
+	}
+
+	return config.Rule{
+		Name:        name,
+		Description: "Auto-generated by permcop suggest",
+		Allow:       []config.Pattern{pattern},
+	}
+}
+
+// timeAgo returns a human-readable description of how long ago t was.
+func timeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		mins := int(d.Minutes())
+		if mins == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", mins)
+	case d < 24*time.Hour:
+		hours := int(d.Hours())
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	case d < 48*time.Hour:
+		return "yesterday"
+	default:
+		days := int(d.Hours() / 24)
+		return fmt.Sprintf("%d days ago", days)
+	}
+}
+
+// parseSelection parses a selection string into sorted 1-based indices.
+// Supports: "all", "none"/empty, numbers (1), ranges (1-3), comma-separated.
+func parseSelection(input string, n int) []int {
+	input = strings.TrimSpace(input)
+	if input == "" || strings.EqualFold(input, "none") {
+		return nil
+	}
+	if strings.EqualFold(input, "all") {
+		result := make([]int, n)
+		for i := range result {
+			result[i] = i + 1
+		}
+		return result
+	}
+
+	seen := map[int]bool{}
+	var result []int
+	for _, part := range strings.Split(input, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if dash := strings.Index(part, "-"); dash > 0 {
+			var lo, hi int
+			fmt.Sscan(part[:dash], &lo)   //nolint:errcheck
+			fmt.Sscan(part[dash+1:], &hi) //nolint:errcheck
+			for i := lo; i <= hi; i++ {
+				if i >= 1 && i <= n && !seen[i] {
+					seen[i] = true
+					result = append(result, i)
+				}
+			}
+		} else {
+			var num int
+			fmt.Sscan(part, &num) //nolint:errcheck
+			if num >= 1 && num <= n && !seen[num] {
+				seen[num] = true
+				result = append(result, num)
+			}
+		}
+	}
+	sort.Ints(result)
+	return result
+}
+
+// stripSuggestHeader removes the leading comment lines and blank lines that
+// runSuggest writes to the temp file before opening the editor, so that only
+// the TOML rule content is written to the config file.
+func stripSuggestHeader(s string) string {
+	lines := strings.Split(s, "\n")
+	start := 0
+	for start < len(lines) {
+		t := strings.TrimSpace(lines[start])
+		if t == "" || strings.HasPrefix(t, "#") {
+			start++
+		} else {
+			break
+		}
+	}
+	return strings.Join(lines[start:], "\n")
+}
+
+func starterConfigFor(logFile string) string {
+	return strings.Replace(
+		starterConfig,
+		`"~/.local/share/permcop/audit.log"`,
+		fmt.Sprintf("%q", logFile),
+		1,
+	)
 }
 
 const starterConfig = `# permcop configuration

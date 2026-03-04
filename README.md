@@ -234,15 +234,19 @@ Hit unit: git push origin main
 
 Reads the audit log for commands that fell through to Claude Code (PASS decisions) and proposes permcop rules for them. Useful for bootstrapping a rule set from real usage.
 
-On a TTY, opens a full-screen scrollable pager. Navigate with `j`/`k` or arrow keys, press `e` or Enter to open `$EDITOR` for the focused command, confirm the diff, and return to the list. Press `q` to write all confirmed rules; `Esc`/`Ctrl+C` to discard.
+On a TTY, opens a full-screen two-panel pager. The top panel lists all unmatched commands; the bottom panel shows details for the selected entry (full command, frequency, last-seen time, and any sub-units that need rules). Navigate with `j`/`k` or arrow keys, press `e` or Enter to open `$EDITOR` for the focused command, confirm the diff, and return to the list. Press `Space` to skip an entry, `q` to write all confirmed rules, or `Esc`/`Ctrl+C` to discard.
 
 ```
-Commands deferred to Claude Code (no permcop rule matched):
+  Commands without permcop rules (3 total):
 
-  [ ] make build                          1×  last seen 2 minutes ago
-  [ ] go test ./...                       3×  last seen 5 minutes ago
-▶ [ ] cat README.md                       1×  last seen 12 minutes ago
+  [ ] make build
+  [ ] go test ./...
+▶ [ ] cat README.md
+────────────────────────────────────────────────────────────────────────────────
+  cat README.md
+  1×  ·  last seen 12 minutes ago
 
+────────────────────────────────────────────────────────────────────────────────
   <e/Enter> edit  <Space> skip  <j/k> navigate  <q> quit   3/3
 ```
 

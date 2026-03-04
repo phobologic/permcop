@@ -557,6 +557,9 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 	if sourcePath == "" {
 		if global {
 			sourcePath = filepath.Join(home, ".claude", "settings.json")
+			if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
+				sourcePath = filepath.Join(home, ".claude", "settings.local.json")
+			}
 		} else {
 			sourcePath = findProjectClaudeSettings(cwd)
 			if sourcePath == "" {
@@ -635,14 +638,17 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 }
 
 // findProjectClaudeSettings walks from cwd upward (stopping at .git or home)
-// looking for .claude/settings.json. Returns empty string if not found.
+// looking for .claude/settings.json or .claude/settings.local.json (in that
+// order of preference). Returns empty string if neither is found.
 func findProjectClaudeSettings(cwd string) string {
 	home, _ := os.UserHomeDir()
 	dir := cwd
 	for {
-		candidate := filepath.Join(dir, ".claude", "settings.json")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		for _, name := range []string{"settings.json", "settings.local.json"} {
+			candidate := filepath.Join(dir, ".claude", name)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
 		}
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			break

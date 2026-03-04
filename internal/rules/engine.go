@@ -52,6 +52,15 @@ func osEnvMap() map[string]string {
 	return m
 }
 
+// logAudit writes an audit entry and surfaces any write error to stderr so
+// operators know when auditing is broken. For a security enforcement tool,
+// silently dropping audit records is unacceptable.
+func (e *Engine) logAudit(entry audit.Entry) {
+	if err := e.logger.Log(entry); err != nil {
+		fmt.Fprintf(os.Stderr, "permcop: audit log error: %v\n", err)
+	}
+}
+
 // Check evaluates command (the raw string from Claude Code) against the rule set.
 // cwd is the working directory for resolving relative file paths.
 func (e *Engine) Check(command, cwd string) (*Result, error) {
@@ -66,7 +75,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 		entry.DecidingRule = rule
 		entry.DecidingPattern = pattern
 		entry.DecidingUnit = unit
-		_ = e.logger.Log(entry)
+		e.logAudit(entry)
 		return &Result{Entry: entry, Allowed: false}, nil
 	}
 
@@ -75,7 +84,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 		entry.DecidingRule = rule
 		entry.DecidingPattern = pattern
 		entry.DecidingUnit = unit
-		_ = e.logger.Log(entry)
+		e.logAudit(entry)
 		return &Result{Entry: entry, Allowed: true}, nil
 	}
 
@@ -85,7 +94,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 		entry.DecidingRule = rule
 		entry.DecidingPattern = pattern
 		entry.DecidingUnit = unit
-		_ = e.logger.Log(entry)
+		e.logAudit(entry)
 		return &Result{Entry: entry, Allowed: true}, nil
 	}
 
@@ -212,7 +221,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 		entry.DecidingRule = rule
 		entry.DecidingPattern = pattern
 		entry.DecidingUnit = &unit
-		_ = e.logger.Log(entry)
+		e.logAudit(entry)
 		return &Result{Entry: entry, Allowed: false}, nil
 	}
 
@@ -221,7 +230,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 		entry.DecidingRule = rule
 		entry.DecidingPattern = pattern
 		entry.DecidingUnit = &unit
-		_ = e.logger.Log(entry)
+		e.logAudit(entry)
 		return &Result{Entry: entry, Allowed: true}, nil
 	}
 

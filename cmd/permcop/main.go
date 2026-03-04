@@ -23,12 +23,51 @@ var version = "dev"
 const usage = `permcop — Claude Code bash permission enforcer
 
 Usage:
-  permcop check                           Read Claude Code hook JSON from stdin, exit 0 (allow) or 2 (deny)
-  permcop explain <cmd>                   Dry-run: show rule evaluation without logging or blocking
-  permcop validate [file]                 Validate config file (default: ~/.config/permcop/config.toml)
-  permcop init                            Set up Claude Code hook and create starter config
-  permcop import-claude-settings [file]   Convert Claude Code permission rules to permcop TOML
-  permcop version                         Print version
+  permcop check                                   Read Claude Code hook JSON from stdin, exit 0 (allow) or 2 (deny)
+  permcop explain <cmd>                           Dry-run: show rule evaluation without logging or blocking
+  permcop validate [file]                         Validate config (default: ~/.config/permcop/config.toml)
+  permcop init [--global]                         Set up Claude Code hook and create config
+  permcop import-claude-settings [--global] [--dry-run] [file]
+                                                  Import Claude Code permissions to permcop TOML
+  permcop version                                 Print version
+  permcop help                                    Show this help message
+
+Config files:
+  Global config:   ~/.config/permcop/config.toml
+  Per-project:     .permcop.toml  (searched upward from CWD to home)
+  Audit log:       ~/.local/share/permcop/audit.log
+`
+
+const usageImportClaudeSettings = `permcop import-claude-settings — Convert Claude Code permissions to permcop TOML
+
+Usage:
+  permcop import-claude-settings [--global] [--dry-run] [sourcefile]
+
+Flags:
+  --global    Read from ~/.claude/settings.json; write to ~/.config/permcop/config.toml
+  --dry-run   Print the generated TOML to stdout without writing anything
+  --help      Show this help message
+
+Default behavior (no flags):
+  Source:  .claude/settings.json  (searched upward from CWD to git root)
+  Dest:    .permcop.toml in CWD
+
+With --global:
+  Source:  ~/.claude/settings.json
+  Dest:    ~/.config/permcop/config.toml
+
+If [sourcefile] is given, it overrides the default source path.
+
+If the destination file already exists, the generated rules are shown and
+you are prompted for confirmation before anything is written. Use --dry-run
+to review output without being prompted.
+
+Examples:
+  permcop import-claude-settings                  # project mode
+  permcop import-claude-settings --global         # global mode
+  permcop import-claude-settings --dry-run        # preview only
+  permcop import-claude-settings ~/other.json     # custom source, project dest
+  permcop import-claude-settings --global --dry-run
 `
 
 func main() {
@@ -38,6 +77,13 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "help", "--help", "-h":
+		if len(os.Args) >= 3 && os.Args[2] == "import-claude-settings" {
+			fmt.Fprint(os.Stdout, usageImportClaudeSettings)
+		} else {
+			fmt.Fprint(os.Stdout, usage)
+		}
+		os.Exit(0)
 	case "version", "--version", "-v":
 		fmt.Printf("permcop %s\n", version)
 		os.Exit(0)
@@ -56,13 +102,29 @@ func main() {
 		}
 		runValidate(path)
 	case "init":
-		runInit()
+		global := len(os.Args) >= 3 && os.Args[2] == "--global"
+		runInit(global)
 	case "import-claude-settings":
-		path := ""
-		if len(os.Args) >= 3 {
-			path = os.Args[2]
+		var global, dryRun bool
+		var sourcePath string
+		for _, arg := range os.Args[2:] {
+			switch arg {
+			case "--global":
+				global = true
+			case "--dry-run":
+				dryRun = true
+			case "--help", "-h":
+				fmt.Fprint(os.Stdout, usageImportClaudeSettings)
+				os.Exit(0)
+			default:
+				if strings.HasPrefix(arg, "-") {
+					fmt.Fprintf(os.Stderr, "unknown flag: %s\n\n%s", arg, usageImportClaudeSettings)
+					os.Exit(1)
+				}
+				sourcePath = arg
+			}
 		}
-		runImportClaudeSettings(path)
+		runImportClaudeSettings(global, dryRun, sourcePath)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n\n%s", os.Args[1], usage)
 		os.Exit(1)
@@ -299,22 +361,40 @@ func runValidate(path string) {
 }
 
 // runInit sets up the Claude Code hook and creates a starter config.
-func runInit() {
+// If global is true, write to ~/.config/permcop/config.toml; otherwise write
+// .permcop.toml in the current working directory.
+func runInit(global bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 1. Create starter config
-	cfgDir := filepath.Join(home, ".config", "permcop")
-	cfgPath := filepath.Join(cfgDir, "config.toml")
-
-	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+	// 1. Determine config path
+	var cfgPath string
+	if global {
+		cfgDir := filepath.Join(home, ".config", "permcop")
 		if err := os.MkdirAll(cfgDir, 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "create config dir: %v\n", err)
 			os.Exit(1)
 		}
+		cfgPath = filepath.Join(cfgDir, "config.toml")
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "working directory: %v\n", err)
+			os.Exit(1)
+		}
+		if _, err := os.Stat(filepath.Join(cwd, ".git")); os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: no .git directory in %s; creating .permcop.toml here anyway\n", cwd)
+		}
+		cfgPath = filepath.Join(cwd, ".permcop.toml")
+	}
+
+	fmt.Printf("Config path: %s\n", cfgPath)
+
+	// 2. Create starter config if not present
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		if err := os.WriteFile(cfgPath, []byte(starterConfig), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "write config: %v\n", err)
 			os.Exit(1)
@@ -324,7 +404,7 @@ func runInit() {
 		fmt.Printf("Config already exists, skipping: %s\n", cfgPath)
 	}
 
-	// 2. Wire up the Claude Code hook in the user's global settings
+	// 3. Wire up the Claude Code hook in the user's global settings
 	claudeSettingsDir := filepath.Join(home, ".claude")
 	claudeSettingsPath := filepath.Join(claudeSettingsDir, "settings.json")
 
@@ -458,30 +538,51 @@ func addHookToSettings(path string) error {
 	return nil
 }
 
-// runImportClaudeSettings reads Claude Code's settings.json permissions and
-// prints equivalent permcop TOML [[rules]] blocks to stdout.
-func runImportClaudeSettings(settingsPath string) {
+// runImportClaudeSettings converts Claude Code's settings.json permissions to
+// permcop TOML and writes them to the appropriate config file.
+func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
 		os.Exit(1)
 	}
-	if settingsPath == "" {
-		settingsPath = filepath.Join(home, ".claude", "settings.json")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "working directory: %v\n", err)
+		os.Exit(1)
 	}
 
-	result, err := importer.FromFile(settingsPath)
+	// Resolve source path
+	if sourcePath == "" {
+		if global {
+			sourcePath = filepath.Join(home, ".claude", "settings.json")
+		} else {
+			sourcePath = findProjectClaudeSettings(cwd)
+			if sourcePath == "" {
+				fmt.Fprintln(os.Stderr, "error: .claude/settings.json not found (searched from CWD to git root); use --global or provide a path")
+				os.Exit(1)
+			}
+		}
+	}
+
+	// Resolve dest path
+	var destPath string
+	if global {
+		destPath = filepath.Join(home, ".config", "permcop", "config.toml")
+	} else {
+		destPath = filepath.Join(cwd, ".permcop.toml")
+	}
+
+	result, err := importer.FromFile(sourcePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "import error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Print warnings
 	for _, w := range result.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
-
-	// Print skipped entries
 	for _, s := range result.Skipped {
 		fmt.Fprintf(os.Stderr, "skipped (no permcop equivalent): %s\n", s)
 	}
@@ -491,16 +592,80 @@ func runImportClaudeSettings(settingsPath string) {
 		return
 	}
 
-	toml := importer.RulesToTOML(result.Rules)
+	content := fmt.Sprintf("# Imported from: %s\n", sourcePath) +
+		"# NOTE: permcop requires a single rule to cover ALL units of a command\n" +
+		"# (command + any redirects). Review and adjust before using.\n\n" +
+		importer.RulesToTOML(result.Rules)
 
-	fmt.Printf("# Imported from: %s\n", settingsPath)
-	fmt.Printf("# Add these rule(s) to your permcop config.\n")
-	fmt.Printf("# NOTE: permcop requires a single rule to cover ALL units of a command\n")
-	fmt.Printf("# (command + any redirects). Review and adjust before using.\n\n")
-	fmt.Print(toml)
+	if dryRun {
+		fmt.Fprintf(os.Stderr, "Source: %s\n", sourcePath)
+		fmt.Fprintf(os.Stderr, "Dest:   %s (dry-run; not written)\n", destPath)
+		fmt.Print(content)
+		return
+	}
 
-	fmt.Fprintf(os.Stderr, "\nImported %d rule(s). Review the output above and append to your config:\n", len(result.Rules))
-	fmt.Fprintf(os.Stderr, "  permcop import-claude-settings >> ~/.config/permcop/config.toml\n")
+	// Check if content is already present in dest
+	existing, readErr := os.ReadFile(destPath)
+	if readErr == nil && strings.Contains(string(existing), content) {
+		fmt.Fprintln(os.Stderr, "Nothing new to add.")
+		return
+	}
+
+	// If dest exists, prompt for confirmation
+	if readErr == nil {
+		if !confirmAppend(destPath, content) {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+			return
+		}
+	}
+
+	f, err := os.OpenFile(destPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open %s: %v\n", destPath, err)
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	if _, err := fmt.Fprint(f, "\n"+content); err != nil {
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", destPath, err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "Wrote %d rule(s) to %s\n", len(result.Rules), destPath)
+}
+
+// findProjectClaudeSettings walks from cwd upward (stopping at .git or home)
+// looking for .claude/settings.json. Returns empty string if not found.
+func findProjectClaudeSettings(cwd string) string {
+	home, _ := os.UserHomeDir()
+	dir := cwd
+	for {
+		candidate := filepath.Join(dir, ".claude", "settings.json")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			break
+		}
+		if dir == home || dir == filepath.Dir(dir) {
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+	return ""
+}
+
+// confirmAppend prints the content to be appended with a + prefix per line,
+// then prompts the user for confirmation. Returns true only if the user types y or Y.
+func confirmAppend(destPath, content string) bool {
+	fmt.Printf("Will append to %s:\n\n", destPath)
+	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+		fmt.Printf("  + %s\n", line)
+	}
+	fmt.Printf("\nAppend? [y/N] ")
+	var resp string
+	fmt.Scanln(&resp)
+	return strings.ToLower(strings.TrimSpace(resp)) == "y"
 }
 
 const starterConfig = `# permcop configuration

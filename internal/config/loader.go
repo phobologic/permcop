@@ -243,6 +243,9 @@ func applyDefaults(cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("home directory: %w", err)
 	}
+	if strings.HasPrefix(cfg.Defaults.LogFile, "~/") {
+		cfg.Defaults.LogFile = filepath.Join(home, cfg.Defaults.LogFile[2:])
+	}
 	if cfg.Defaults.LogFile == "" {
 		cfg.Defaults.LogFile = filepath.Join(home, ".local", "share", "permcop", "audit.log")
 	} else {

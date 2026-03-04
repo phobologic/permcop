@@ -137,6 +137,10 @@ func compileGlobPaths(patterns []string, homeDir string) []compiledGlobPath {
 type Result struct {
 	audit.Entry
 	Allowed bool
+	// DefaultDeny is true when the command was denied solely because no allow
+	// rule matched (as opposed to an explicit deny pattern match). Only
+	// default-deny results are eligible for the interactive prompt flow.
+	DefaultDeny bool
 }
 
 // Engine evaluates commands against a config.
@@ -336,7 +340,11 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 		}
 
 		if !covered {
-			return deny("no matching allow rule", "", "", orig)
+			r, err := deny("no matching allow rule", "", "", orig)
+			if r != nil {
+				r.DefaultDeny = true
+			}
+			return r, err
 		}
 	}
 
@@ -396,7 +404,11 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 		}
 	}
 
-	return deny("no matching allow rule", "", "")
+	r, err := deny("no matching allow rule", "", "")
+	if r != nil {
+		r.DefaultDeny = true
+	}
+	return r, err
 }
 
 // --- Matching helpers ---

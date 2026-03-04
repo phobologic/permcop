@@ -40,6 +40,8 @@ All files are optional. Project files are searched upward from CWD, stopping at 
 [defaults]
 log_file = "~/.local/share/permcop/audit.log"
 log_format = "text"              # "text" or "json"
+log_max_size_mb = 10            # rotate when log exceeds this size (0 = never rotate)
+log_max_files   = 5             # number of rotated copies to keep
 unknown_variable_action = "deny" # "deny" | "warn" | "allow"
 allow_sudo = false
 deny_subshells = false
@@ -209,6 +211,7 @@ permcop check                         Hook entry point (stdin → exit 0/2)
 permcop explain <command>             Dry-run: show rule evaluation
 permcop validate [config-file]        Validate config syntax and structure
 permcop init                          Wire hook + create starter config
+permcop suggest [--n N] [--dry-run]   Propose rules for unmatched commands
 permcop import-claude-settings [file] Convert Claude Code permissions to TOML
 permcop version                       Print version
 ```
@@ -226,6 +229,32 @@ Rule:     "Allow safe git operations"
 Pattern:  prefix:git push
 Hit unit: git push origin main
 ```
+
+### suggest
+
+Reads the audit log for commands that fell through to Claude Code (PASS decisions) and proposes permcop rules for them. Useful for bootstrapping a rule set from real usage.
+
+```
+$ permcop suggest
+Recent unmatched commands (last 20):
+  1. make build
+  2. go test ./...
+  3. cat README.md
+
+Select commands to add rules for (comma-separated, or 'a' for all): 1,2
+
+Generated rules written to .permcop.local.toml
+```
+
+Flags:
+
+| Flag | Description |
+|------|-------------|
+| `--n N` | Number of recent PASS entries to surface (default: 20) |
+| `--dry-run` | Print generated TOML to stdout; don't write or prompt |
+| `--shared` | Write to `.permcop.toml` (committed) instead of `.permcop.local.toml` |
+| `--global` | Target global config (`~/.config/permcop/`) |
+| `--log path` | Override audit log path |
 
 ### import-claude-settings
 
@@ -263,6 +292,18 @@ Every decision is logged to `~/.local/share/permcop/audit.log` (configurable).
 ```
 
 **JSON format** (`log_format = "json"`): one object per line, suitable for `jq`.
+
+### Log rotation
+
+Set `log_max_size_mb` to rotate the log when it exceeds a size threshold. Rotated files are named `audit.log.1`, `audit.log.2`, etc. `log_max_files` controls how many copies are kept (oldest are deleted). Both settings default to 0 (rotation disabled).
+
+```toml
+[defaults]
+log_max_size_mb = 10
+log_max_files   = 5
+```
+
+The `suggest` command reads rotated log files automatically when scanning for PASS entries.
 
 ## Hook wiring
 

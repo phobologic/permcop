@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/mikecafarella/permcop/internal/audit"
 	"github.com/mikecafarella/permcop/internal/config"
 	"github.com/mikecafarella/permcop/internal/hook"
@@ -979,17 +981,15 @@ func runSuggest(args []string) {
 		return seen[ordered[i]].lastSeen.After(seen[ordered[j]].lastSeen)
 	})
 
-	// Display list.
-	fmt.Println("Commands deferred to Claude Code (no permcop rule matched):")
-	fmt.Println()
-	for i, cmd := range ordered {
-		s := seen[cmd]
-		fmt.Printf("  %2d.  %-45s %d×  last seen %s\n",
-			i+1, cmd, s.count, timeAgo(s.lastSeen))
-	}
-	fmt.Println()
-
 	if dryRun {
+		fmt.Println("Commands deferred to Claude Code (no permcop rule matched):")
+		fmt.Println()
+		for i, cmd := range ordered {
+			s := seen[cmd]
+			fmt.Printf("  %2d.  %-45s %d×  last seen %s\n",
+				i+1, cmd, s.count, timeAgo(s.lastSeen))
+		}
+		fmt.Println()
 		fmt.Println("# Generated rules (dry-run):")
 		fmt.Println()
 		for _, cmd := range ordered {
@@ -1000,12 +1000,36 @@ func runSuggest(args []string) {
 	}
 
 	// Prompt for selection.
-	fmt.Printf("Add rules for [1-%d, all, none]: ", len(ordered))
-	reader := bufio.NewReader(os.Stdin)
-	selInput, _ := reader.ReadString('\n')
-	selInput = strings.TrimSpace(selInput)
+	var selected []int
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		labels := make([]string, len(ordered))
+		for i, cmd := range ordered {
+			s := seen[cmd]
+			labels[i] = fmt.Sprintf("%-45s %d×  last seen %s", cmd, s.count, timeAgo(s.lastSeen))
+		}
+		selected, err = checkboxSelect(labels)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "selection: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Println("Commands deferred to Claude Code (no permcop rule matched):")
+		fmt.Println()
+		for i, cmd := range ordered {
+			s := seen[cmd]
+			fmt.Printf("  %2d.  %-45s %d×  last seen %s\n",
+				i+1, cmd, s.count, timeAgo(s.lastSeen))
+		}
+		fmt.Println()
+		fmt.Printf("Add rules for [1-%d, all, none]: ", len(ordered))
+		reader := bufio.NewReader(os.Stdin)
+		selInput, _ := reader.ReadString('\n')
+		idxs := parseSelection(strings.TrimSpace(selInput), len(ordered))
+		for _, i := range idxs {
+			selected = append(selected, i-1)
+		}
+	}
 
-	selected := parseSelection(selInput, len(ordered))
 	if len(selected) == 0 {
 		fmt.Fprintln(os.Stderr, "No commands selected.")
 		return
@@ -1014,7 +1038,7 @@ func runSuggest(args []string) {
 	// For each selected command: generate TOML, open editor, confirm.
 	var confirmedTOML []string
 	for _, idx := range selected {
-		cmd := ordered[idx-1]
+		cmd := ordered[idx]
 		rule := suggestRule(cmd)
 		tomlContent := importer.RulesToTOML([]config.Rule{rule})
 
@@ -1142,6 +1166,120 @@ func timeAgo(t time.Time) string {
 	default:
 		days := int(d.Hours() / 24)
 		return fmt.Sprintf("%d days ago", days)
+	}
+}
+
+// checkboxSelect renders an interactive checkbox list on the terminal.
+// labels are the display strings for each item. Returns 0-based indices of
+// selected items, or nil if the user cancels. Requires stdin to be a TTY.
+func checkboxSelect(labels []string) ([]int, error) {
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return nil, fmt.Errorf("raw mode: %w", err)
+	}
+	defer term.Restore(int(os.Stdin.Fd()), oldState) //nolint:errcheck
+
+	checked := make([]bool, len(labels))
+	cursor := 0
+
+	// header + items + blank + footer
+	totalLines := 2 + len(labels) + 2
+
+	// Draw returns the full block of lines, always re-rendering from the top.
+	render := func() {
+		// Move cursor up totalLines (except on first paint).
+		fmt.Print("\r\033[K") // clear current line
+		// Go up to where we started.
+		if totalLines > 1 {
+			fmt.Printf("\033[%dA", totalLines-1)
+		}
+		fmt.Print("Commands deferred to Claude Code (no permcop rule matched):\r\n")
+		fmt.Print("\r\n")
+		for i, lbl := range labels {
+			mark := " "
+			if checked[i] {
+				mark = "x"
+			}
+			line := fmt.Sprintf("  [%s] %s", mark, lbl)
+			if i == cursor {
+				// Bold + reverse video for the active row.
+				fmt.Printf("\033[1;7m%s\033[0m\r\n", line)
+			} else {
+				fmt.Printf("%s\r\n", line)
+			}
+		}
+		fmt.Print("\r\n")
+		fmt.Print("  \033[2m<Space> toggle  <a> all  <Enter> confirm  <q> quit\033[0m\r\n")
+	}
+
+	// Initial paint — just print the block (cursor is already at the right place).
+	fmt.Print("Commands deferred to Claude Code (no permcop rule matched):\r\n")
+	fmt.Print("\r\n")
+	for _, lbl := range labels {
+		fmt.Printf("  [ ] %s\r\n", lbl)
+	}
+	fmt.Print("\r\n")
+	fmt.Print("  \033[2m<Space> toggle  <a> all  <Enter> confirm  <q> quit\033[0m\r\n")
+
+	buf := make([]byte, 16)
+	for {
+		render()
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			return nil, err
+		}
+		b := buf[:n]
+
+		switch {
+		case len(b) == 1 && (b[0] == 'q' || b[0] == 3 /* Ctrl+C */ || b[0] == 27 /* Esc */):
+			fmt.Print("\r\n")
+			return nil, nil
+
+		case len(b) == 1 && b[0] == 13: // Enter
+			fmt.Print("\r\n")
+			var result []int
+			for i, c := range checked {
+				if c {
+					result = append(result, i)
+				}
+			}
+			return result, nil
+
+		case len(b) == 1 && b[0] == ' ':
+			checked[cursor] = !checked[cursor]
+
+		case len(b) == 1 && (b[0] == 'k'):
+			if cursor > 0 {
+				cursor--
+			}
+
+		case len(b) == 1 && (b[0] == 'j'):
+			if cursor < len(labels)-1 {
+				cursor++
+			}
+
+		case len(b) == 1 && b[0] == 'a':
+			allChecked := true
+			for _, c := range checked {
+				if !c {
+					allChecked = false
+					break
+				}
+			}
+			for i := range checked {
+				checked[i] = !allChecked
+			}
+
+		case len(b) >= 3 && b[0] == 27 && b[1] == '[' && b[2] == 'A': // Up arrow
+			if cursor > 0 {
+				cursor--
+			}
+
+		case len(b) >= 3 && b[0] == 27 && b[1] == '[' && b[2] == 'B': // Down arrow
+			if cursor < len(labels)-1 {
+				cursor++
+			}
+		}
 	}
 }
 

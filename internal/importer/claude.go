@@ -208,8 +208,20 @@ func parseEntry(entry string) (tool, pattern string, ok bool) {
 }
 
 // toPattern converts a Claude Code glob string to a permcop Pattern.
-// Claude Code uses "*" glob syntax which maps directly to our glob type.
+// Claude Code uses "*" glob syntax which maps directly to our glob type,
+// except that a trailing ":*" wildcard maps to a prefix match so that the
+// base command (with no arguments) is also covered.
+//
+//	"make install:*"    → { type = "prefix", pattern = "make install" }
+//	"git log:--oneline" → { type = "glob",   pattern = "git log --oneline" }
+//	"npm run test"      → { type = "glob",   pattern = "npm run test" }
 func toPattern(pattern string) config.Pattern {
+	if strings.HasSuffix(pattern, ":*") {
+		return config.Pattern{
+			Type:    config.PatternPrefix,
+			Pattern: pattern[:len(pattern)-2],
+		}
+	}
 	return config.Pattern{
 		Type:    config.PatternGlob,
 		Pattern: translateClaudePattern(pattern),
@@ -219,7 +231,6 @@ func toPattern(pattern string) config.Pattern {
 // translateClaudePattern converts Claude Code's colon-separated argument syntax
 // to permcop's space-separated glob format.
 //
-//	"make test:*"       → "make test *"
 //	"git log:--oneline" → "git log --oneline"
 //	"npm run test"      → "npm run test"  (unchanged, no colon)
 func translateClaudePattern(pattern string) string {

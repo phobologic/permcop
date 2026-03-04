@@ -88,14 +88,6 @@ func TestConvert_BashRules(t *testing.T) {
 		t.Errorf("rm deny: got %d patterns, want 1", len(rm.Deny))
 	}
 
-	// All patterns should be glob type
-	for _, r := range result.Rules {
-		for _, p := range append(r.Allow, r.Deny...) {
-			if p.Type != config.PatternGlob {
-				t.Errorf("pattern type: got %q, want glob", p.Type)
-			}
-		}
-	}
 }
 
 func TestConvert_FileRules(t *testing.T) {
@@ -385,24 +377,45 @@ func TestTranslateClaudePattern(t *testing.T) {
 func TestConvert_ColonPatternTranslation(t *testing.T) {
 	t.Parallel()
 
-	perms := ClaudePermissions{
-		Allow: []string{"Bash(make test:*)"},
+	tests := []struct {
+		name        string
+		entry       string
+		wantType    config.PatternType
+		wantPattern string
+	}{
+		{
+			name:        "colon wildcard becomes prefix",
+			entry:       "Bash(make test:*)",
+			wantType:    config.PatternPrefix,
+			wantPattern: "make test",
+		},
+		{
+			name:        "colon specific arg stays glob",
+			entry:       "Bash(git log:--oneline)",
+			wantType:    config.PatternGlob,
+			wantPattern: "git log --oneline",
+		},
 	}
 
-	result, err := Convert(perms)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(result.Rules) != 1 {
-		t.Fatalf("expected 1 rule, got %d", len(result.Rules))
-	}
-	if len(result.Rules[0].Allow) != 1 {
-		t.Fatalf("expected 1 allow pattern, got %d", len(result.Rules[0].Allow))
-	}
-	got := result.Rules[0].Allow[0].Pattern
-	if got != "make test *" {
-		t.Errorf("pattern: got %q, want %q", got, "make test *")
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := Convert(ClaudePermissions{Allow: []string{tc.entry}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Rules) != 1 || len(result.Rules[0].Allow) != 1 {
+				t.Fatalf("expected 1 rule with 1 allow pattern")
+			}
+			p := result.Rules[0].Allow[0]
+			if p.Type != tc.wantType {
+				t.Errorf("type: got %q, want %q", p.Type, tc.wantType)
+			}
+			if p.Pattern != tc.wantPattern {
+				t.Errorf("pattern: got %q, want %q", p.Pattern, tc.wantPattern)
+			}
+		})
 	}
 }
 

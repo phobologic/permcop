@@ -394,7 +394,30 @@ func addHookToSettings(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, out, 0600)
+
+	// Write atomically: temp file in the same directory, then rename.
+	// os.Rename is atomic on POSIX when src and dst share a filesystem,
+	// preventing corruption if the process is interrupted mid-write.
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".settings-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
 }
 
 // runImportClaudeSettings reads Claude Code's settings.json permissions and

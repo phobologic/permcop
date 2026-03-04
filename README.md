@@ -234,17 +234,19 @@ Hit unit: git push origin main
 
 Reads the audit log for commands that fell through to Claude Code (PASS decisions) and proposes permcop rules for them. Useful for bootstrapping a rule set from real usage.
 
-```
-$ permcop suggest
-Recent unmatched commands (last 20):
-  1. make build
-  2. go test ./...
-  3. cat README.md
+On a TTY, opens a full-screen scrollable pager. Navigate with `j`/`k` or arrow keys, press `e` or Enter to open `$EDITOR` for the focused command, confirm the diff, and return to the list. Press `q` to write all confirmed rules; `Esc`/`Ctrl+C` to discard.
 
-Select commands to add rules for (comma-separated, or 'a' for all): 1,2
-
-Generated rules written to .permcop.local.toml
 ```
+Commands deferred to Claude Code (no permcop rule matched):
+
+  [ ] make build                          1×  last seen 2 minutes ago
+  [ ] go test ./...                       3×  last seen 5 minutes ago
+▶ [ ] cat README.md                       1×  last seen 12 minutes ago
+
+  <e/Enter> edit  <Space> skip  <j/k> navigate  <q> quit   3/3
+```
+
+When piped (non-TTY), falls back to a numbered text prompt: enter `1,2`, `all`, or `none`.
 
 Flags:
 

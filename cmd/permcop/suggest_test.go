@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -241,6 +242,75 @@ func TestLabelForEntry(t *testing.T) {
 			got := labelForEntry(tc.cmd, tc.passUnits)
 			if got != tc.want {
 				t.Errorf("labelForEntry(%q, %v) = %q, want %q", tc.cmd, tc.passUnits, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunSuggestTUIViewport(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		items      int
+		viewH      int
+		cursor     int
+		initOffset int
+		wantOffset int
+	}{
+		{
+			name:  "cursor already visible — no change",
+			items: 10, viewH: 5, cursor: 2, initOffset: 0, wantOffset: 0,
+		},
+		{
+			name:  "cursor below viewport — scroll down",
+			items: 10, viewH: 5, cursor: 7, initOffset: 0, wantOffset: 3,
+		},
+		{
+			name:  "cursor above viewport — scroll up",
+			items: 10, viewH: 5, cursor: 1, initOffset: 4, wantOffset: 1,
+		},
+		{
+			name:  "clamp offset at zero",
+			items: 10, viewH: 5, cursor: 0, initOffset: 2, wantOffset: 0,
+		},
+		{
+			name:  "clamp offset at max (items-viewH)",
+			items: 10, viewH: 5, cursor: 9, initOffset: 0, wantOffset: 5,
+		},
+		{
+			name:  "viewH larger than item count",
+			items: 3, viewH: 10, cursor: 2, initOffset: 0, wantOffset: 0,
+		},
+		{
+			name:  "single item",
+			items: 1, viewH: 5, cursor: 0, initOffset: 0, wantOffset: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			items := make([]string, tc.items)
+			seen := make(map[string]*cmdEntry, tc.items)
+			for i := range items {
+				items[i] = fmt.Sprintf("cmd%d", i)
+				seen[items[i]] = &cmdEntry{command: items[i], count: 1}
+			}
+			ts := &tuiState{
+				items:  items,
+				seen:   seen,
+				status: make([]int, tc.items),
+				toml:   make([]string, tc.items),
+				cursor: tc.cursor,
+				offset: tc.initOffset,
+				viewH:  tc.viewH,
+				termW:  80,
+				termH:  tc.viewH + 4,
+			}
+			ts.clampOffset()
+			if ts.offset != tc.wantOffset {
+				t.Errorf("clampOffset(): offset = %d, want %d", ts.offset, tc.wantOffset)
 			}
 		})
 	}

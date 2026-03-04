@@ -100,8 +100,16 @@ Flags:
 
 Default destination (no flags): .permcop.local.toml in CWD
 
+Interactive TUI (TTY):
+  j / ↓        move down
+  k / ↑        move up
+  e / Enter    open $EDITOR for the focused command, confirm, return to list
+  Space        mark focused command as skipped (toggle)
+  q            quit and write all confirmed rules
+  Esc / Ctrl+C quit without writing
+
 Examples:
-  permcop suggest              # interactive: pick commands, edit rules, confirm
+  permcop suggest              # interactive pager: browse, edit, confirm
   permcop suggest --dry-run    # preview generated TOML for all recent misses
   permcop suggest --n 50       # surface last 50 unmatched commands
   permcop suggest --global     # target global config
@@ -847,6 +855,14 @@ func offerGitignore(cwd, filename string) {
 
 // confirmAppend prints the content to be appended with a + prefix per line,
 // then prompts the user for confirmation. Returns true only if the user types y or Y.
+// cmdEntry holds aggregated information about a command seen in the audit log.
+type cmdEntry struct {
+	command   string
+	count     int
+	lastSeen  time.Time
+	passUnits []string // unit values with no matching allow rule, from most recent entry
+}
+
 func confirmAppend(destPath, content string) bool {
 	fmt.Printf("Will append to %s:\n\n", destPath)
 	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
@@ -958,12 +974,6 @@ func runSuggest(args []string) {
 	}
 
 	// Deduplicate by OriginalCommand, most-recent-first.
-	type cmdEntry struct {
-		command   string
-		count     int
-		lastSeen  time.Time
-		passUnits []string // unit values with no matching allow rule, from most recent entry
-	}
 	seen := map[string]*cmdEntry{}
 	var ordered []string
 	for _, e := range entries {
@@ -1002,19 +1012,10 @@ func runSuggest(args []string) {
 		return
 	}
 
-	// Prompt for selection.
-	var selected []int
+	// Prompt for selection and editing.
+	var confirmedTOML []string
 	if term.IsTerminal(int(os.Stdin.Fd())) {
-		labels := make([]string, len(ordered))
-		for i, cmd := range ordered {
-			s := seen[cmd]
-			labels[i] = fmt.Sprintf("%-45s %d×  last seen %s", labelForEntry(cmd, s.passUnits), s.count, timeAgo(s.lastSeen))
-		}
-		selected, err = checkboxSelect(labels)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "selection: %v\n", err)
-			os.Exit(1)
-		}
+		confirmedTOML = runSuggestTUI(ordered, seen, destPath)
 	} else {
 		fmt.Println("Commands deferred to Claude Code (no permcop rule matched):")
 		fmt.Println()
@@ -1028,73 +1029,65 @@ func runSuggest(args []string) {
 		reader := bufio.NewReader(os.Stdin)
 		selInput, _ := reader.ReadString('\n')
 		idxs := parseSelection(strings.TrimSpace(selInput), len(ordered))
+		var selected []int
 		for _, i := range idxs {
 			selected = append(selected, i-1)
 		}
-	}
-
-	if len(selected) == 0 {
-		fmt.Fprintln(os.Stderr, "No commands selected.")
-		return
-	}
-
-	// For each selected command: generate TOML, open editor, confirm.
-	var confirmedTOML []string
-	for _, idx := range selected {
-		cmd := ordered[idx]
-		passUnits := seen[cmd].passUnits
-		suggested := suggestRulesForUnits(passUnits, cmd)
-		tomlContent := importer.RulesToTOML(suggested)
-
-		// Write draft to temp file.
-		tmp, err := os.CreateTemp("", "permcop-suggest-*.toml")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "create temp file: %v\n", err)
-			continue
+		if len(selected) == 0 {
+			fmt.Fprintln(os.Stderr, "No commands selected.")
+			return
 		}
-		tmpName := tmp.Name()
-		header := fmt.Sprintf("# Suggested rule for: %s\n", cmd)
-		if len(passUnits) > 0 && !(len(passUnits) == 1 && passUnits[0] == cmd) {
-			header += fmt.Sprintf("# Unmatched units: %s\n", strings.Join(passUnits, ", "))
-		}
-		header += "# Edit as needed, then save and quit.\n\n"
-		if _, err := fmt.Fprint(tmp, header+tomlContent); err != nil {
+		for _, idx := range selected {
+			cmd := ordered[idx]
+			passUnits := seen[cmd].passUnits
+			suggested := suggestRulesForUnits(passUnits, cmd)
+			tomlContent := importer.RulesToTOML(suggested)
+
+			tmp, err := os.CreateTemp("", "permcop-suggest-*.toml")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "create temp file: %v\n", err)
+				continue
+			}
+			tmpName := tmp.Name()
+			header := fmt.Sprintf("# Suggested rule for: %s\n", cmd)
+			if len(passUnits) > 0 && !(len(passUnits) == 1 && passUnits[0] == cmd) {
+				header += fmt.Sprintf("# Unmatched units: %s\n", strings.Join(passUnits, ", "))
+			}
+			header += "# Edit as needed, then save and quit.\n\n"
+			if _, err := fmt.Fprint(tmp, header+tomlContent); err != nil {
+				tmp.Close()
+				os.Remove(tmpName)
+				fmt.Fprintf(os.Stderr, "write temp file: %v\n", err)
+				continue
+			}
 			tmp.Close()
+
+			editorBin := os.Getenv("EDITOR")
+			if editorBin == "" {
+				editorBin = "vi"
+			}
+			edCmd := exec.Command(editorBin, tmpName)
+			edCmd.Stdin = os.Stdin
+			edCmd.Stdout = os.Stdout
+			edCmd.Stderr = os.Stderr
+			if err := edCmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "editor exited with error: %v\n", err)
+			}
+
+			content, err := os.ReadFile(tmpName)
 			os.Remove(tmpName)
-			fmt.Fprintf(os.Stderr, "write temp file: %v\n", err)
-			continue
-		}
-		tmp.Close()
-
-		// Open $EDITOR.
-		editorBin := os.Getenv("EDITOR")
-		if editorBin == "" {
-			editorBin = "vi"
-		}
-		edCmd := exec.Command(editorBin, tmpName)
-		edCmd.Stdin = os.Stdin
-		edCmd.Stdout = os.Stdout
-		edCmd.Stderr = os.Stderr
-		if err := edCmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "editor exited with error: %v\n", err)
-		}
-
-		// Read back edited content.
-		content, err := os.ReadFile(tmpName)
-		os.Remove(tmpName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "read temp file: %v\n", err)
-			continue
-		}
-		edited := stripSuggestHeader(string(content))
-		if strings.TrimSpace(edited) == "" {
-			fmt.Fprintln(os.Stderr, "Empty content; skipping.")
-			continue
-		}
-
-		// Show diff and confirm.
-		if confirmAppend(destPath, edited) {
-			confirmedTOML = append(confirmedTOML, edited)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "read temp file: %v\n", err)
+				continue
+			}
+			edited := stripSuggestHeader(string(content))
+			if strings.TrimSpace(edited) == "" {
+				fmt.Fprintln(os.Stderr, "Empty content; skipping.")
+				continue
+			}
+			if confirmAppend(destPath, edited) {
+				confirmedTOML = append(confirmedTOML, edited)
+			}
 		}
 	}
 
@@ -1214,130 +1207,274 @@ func timeAgo(t time.Time) string {
 	}
 }
 
-// checkboxSelect renders an interactive checkbox list on the terminal.
-// labels are the display strings for each item. Returns 0-based indices of
-// selected items, or nil if the user cancels. Requires stdin to be a TTY.
-func checkboxSelect(labels []string) ([]int, error) {
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		return nil, fmt.Errorf("raw mode: %w", err)
-	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState) //nolint:errcheck
+// tuiItemStatus tracks per-item state in the suggest TUI.
+const (
+	tuiUnvisited = 0
+	tuiConfirmed = 1
+	tuiSkipped   = -1
+)
 
-	// Truncate labels to terminal width to prevent line-wrapping, which would
-	// break the cursor-up math used to redraw in place.
-	width, _, err := term.GetSize(int(os.Stdin.Fd()))
-	if err != nil || width <= 0 {
-		width = 80
+// tuiState holds all mutable state for the suggest pager TUI.
+type tuiState struct {
+	items  []string
+	seen   map[string]*cmdEntry
+	status []int    // tuiUnvisited / tuiConfirmed / tuiSkipped per item
+	toml   []string // confirmed TOML per item (meaningful only when status==tuiConfirmed)
+	cursor int
+	offset int
+	termW  int
+	termH  int
+	viewH  int // rows available for items = termH - 4 (header + blank + blank + footer)
+}
+
+// clampOffset ensures cursor is visible in the viewport.
+func (t *tuiState) clampOffset() {
+	if t.cursor < t.offset {
+		t.offset = t.cursor
 	}
-	const prefix = "  [ ] " // 6 chars
-	maxLabel := width - len(prefix)
-	if maxLabel < 10 {
-		maxLabel = 10
+	if t.cursor >= t.offset+t.viewH {
+		t.offset = t.cursor - t.viewH + 1
 	}
-	display := make([]string, len(labels))
-	for i, lbl := range labels {
-		if len(lbl) > maxLabel {
-			display[i] = lbl[:maxLabel-1] + "…"
+	if t.offset < 0 {
+		t.offset = 0
+	}
+	max := len(t.items) - t.viewH
+	if max < 0 {
+		max = 0
+	}
+	if t.offset > max {
+		t.offset = max
+	}
+}
+
+func (t *tuiState) statusChar(i int) string {
+	switch t.status[i] {
+	case tuiConfirmed:
+		return "✓"
+	case tuiSkipped:
+		return "-"
+	default:
+		return " "
+	}
+}
+
+const (
+	tuiPrefixCols = 6  // "  [ ] "
+	tuiMetaCols   = 26 // "99×  last seen 9 days ago  "
+)
+
+func (t *tuiState) formatRow(i int) string {
+	entry := t.seen[t.items[i]]
+	meta := fmt.Sprintf("%d×  last seen %s", entry.count, timeAgo(entry.lastSeen))
+	cmdLabel := labelForEntry(t.items[i], entry.passUnits)
+
+	available := t.termW - tuiPrefixCols - tuiMetaCols - 2
+	if available < 10 {
+		available = 10
+	}
+	runes := []rune(cmdLabel)
+	if len(runes) > available {
+		runes = append(runes[:available-1], '…')
+		cmdLabel = string(runes)
+	}
+	pad := available - len([]rune(cmdLabel))
+	if pad < 0 {
+		pad = 0
+	}
+	return fmt.Sprintf("  [%s] %s%s  %s", t.statusChar(i), cmdLabel, strings.Repeat(" ", pad), meta)
+}
+
+func (t *tuiState) render() {
+	fmt.Print("\033[H")
+	fmt.Print("\033[KCommands deferred to Claude Code (no permcop rule matched):\r\n")
+	fmt.Print("\033[K\r\n")
+
+	end := t.offset + t.viewH
+	if end > len(t.items) {
+		end = len(t.items)
+	}
+	for i := t.offset; i < end; i++ {
+		line := t.formatRow(i)
+		fmt.Print("\033[K")
+		if i == t.cursor {
+			fmt.Printf("\033[1;7m%s\033[0m\r\n", line)
 		} else {
-			display[i] = lbl
+			fmt.Printf("%s\r\n", line)
+		}
+	}
+	// Blank out any leftover lines from a previous render (e.g. after resize).
+	for i := end - t.offset; i < t.viewH; i++ {
+		fmt.Print("\033[K\r\n")
+	}
+	fmt.Print("\033[K\r\n")
+	pos := fmt.Sprintf("%d/%d", t.cursor+1, len(t.items))
+	fmt.Printf("\033[K  \033[2m<e/Enter> edit  <Space> skip  <j/k> navigate  <q> quit   %s\033[0m", pos)
+}
+
+// editItem drops out of raw mode, opens $EDITOR for item idx, shows confirm
+// prompt, then re-enters raw mode. state is updated in place.
+func (t *tuiState) editItem(idx int, destPath string, state **term.State) {
+	cmd := t.items[idx]
+	entry := t.seen[cmd]
+	fd := int(os.Stdin.Fd())
+
+	// Restore cooked mode so editor and confirm prompt work normally.
+	if *state != nil {
+		term.Restore(fd, *state) //nolint:errcheck
+		*state = nil
+	}
+	fmt.Print("\033[2J\033[H") // clear screen before editor takes over
+
+	suggested := suggestRulesForUnits(entry.passUnits, cmd)
+	tomlContent := importer.RulesToTOML(suggested)
+
+	tmp, err := os.CreateTemp("", "permcop-suggest-*.toml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create temp file: %v\n", err)
+	} else {
+		tmpName := tmp.Name()
+		header := fmt.Sprintf("# Suggested rule for: %s\n", cmd)
+		if len(entry.passUnits) > 0 && !(len(entry.passUnits) == 1 && entry.passUnits[0] == cmd) {
+			header += fmt.Sprintf("# Unmatched units: %s\n", strings.Join(entry.passUnits, ", "))
+		}
+		header += "# Edit as needed, then save and quit.\n\n"
+		if _, werr := fmt.Fprint(tmp, header+tomlContent); werr != nil {
+			fmt.Fprintf(os.Stderr, "write temp file: %v\n", werr)
+		}
+		tmp.Close()
+
+		editorBin := os.Getenv("EDITOR")
+		if editorBin == "" {
+			editorBin = "vi"
+		}
+		edCmd := exec.Command(editorBin, tmpName)
+		edCmd.Stdin = os.Stdin
+		edCmd.Stdout = os.Stdout
+		edCmd.Stderr = os.Stderr
+		if rerr := edCmd.Run(); rerr != nil {
+			fmt.Fprintf(os.Stderr, "editor exited with error: %v\n", rerr)
+		}
+
+		content, rerr := os.ReadFile(tmpName)
+		os.Remove(tmpName)
+		if rerr != nil {
+			fmt.Fprintf(os.Stderr, "read temp file: %v\n", rerr)
+		} else {
+			edited := stripSuggestHeader(string(content))
+			if strings.TrimSpace(edited) == "" {
+				fmt.Fprintln(os.Stderr, "Empty content; skipping.")
+			} else if confirmAppend(destPath, edited) {
+				t.status[idx] = tuiConfirmed
+				t.toml[idx] = edited
+			}
 		}
 	}
 
-	checked := make([]bool, len(labels))
-	cursor := 0
+	// Re-enter raw mode and redraw.
+	*state, _ = term.MakeRaw(fd)
+	fmt.Print("\033[2J\033[H")
+}
 
-	// totalLines: header + blank + items + blank + footer (no trailing newline on footer)
-	totalLines := len(labels) + 4
+// runSuggestTUI runs the full-screen pager TUI for permcop suggest.
+// Returns TOML strings for all confirmed rules.
+func runSuggestTUI(ordered []string, seen map[string]*cmdEntry, destPath string) []string {
+	fd := int(os.Stdin.Fd())
 
-	first := true
-	render := func() {
-		if !first {
-			// Return to the start of the header line.
-			fmt.Printf("\033[%dA\r", totalLines-1)
-		}
-		first = false
-
-		fmt.Printf("\033[KCommands deferred to Claude Code (no permcop rule matched):\r\n")
-		fmt.Print("\033[K\r\n")
-		for i, lbl := range display {
-			mark := " "
-			if checked[i] {
-				mark = "x"
-			}
-			line := fmt.Sprintf("  [%s] %s", mark, lbl)
-			fmt.Print("\033[K")
-			if i == cursor {
-				fmt.Printf("\033[1;7m%s\033[0m\r\n", line)
-			} else {
-				fmt.Printf("%s\r\n", line)
-			}
-		}
-		fmt.Print("\033[K\r\n")
-		// Footer: no trailing \r\n so cursor stays on this line for next move-up.
-		fmt.Print("\033[K  \033[2m<Space> toggle  <a> all  <Enter> confirm  <q> quit\033[0m")
+	w, h, err := term.GetSize(fd)
+	if err != nil || w <= 0 {
+		w = 80
 	}
+	if err != nil || h <= 0 {
+		h = 24
+	}
+
+	viewH := h - 4
+	if viewH < 1 {
+		viewH = 1
+	}
+
+	t := &tuiState{
+		items:  ordered,
+		seen:   seen,
+		status: make([]int, len(ordered)),
+		toml:   make([]string, len(ordered)),
+		termW:  w,
+		termH:  h,
+		viewH:  viewH,
+	}
+
+	var state *term.State
+	state, _ = term.MakeRaw(fd)
+	defer func() {
+		if state != nil {
+			term.Restore(fd, state) //nolint:errcheck
+		}
+	}()
+
+	fmt.Print("\033[2J\033[H") // initial clear
 
 	buf := make([]byte, 16)
 	for {
-		render()
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			return nil, err
+		t.render()
+		n, rerr := os.Stdin.Read(buf)
+		if rerr != nil {
+			break
 		}
 		b := buf[:n]
 
 		switch {
-		case len(b) == 1 && (b[0] == 'q' || b[0] == 3 /* Ctrl+C */ || b[0] == 27 /* Esc */):
+		case len(b) == 1 && b[0] == 'q':
+			// Quit and write confirmed rules.
 			fmt.Print("\r\n")
-			return nil, nil
-
-		case len(b) == 1 && b[0] == 13: // Enter
-			fmt.Print("\r\n")
-			var result []int
-			for i, c := range checked {
-				if c {
-					result = append(result, i)
+			var out []string
+			for i, s := range t.status {
+				if s == tuiConfirmed {
+					out = append(out, t.toml[i])
 				}
 			}
-			return result, nil
+			return out
+
+		case len(b) == 1 && (b[0] == 3 /* Ctrl+C */ || b[0] == 27 /* Esc */):
+			// Discard — exit without writing.
+			fmt.Print("\r\n")
+			return nil
+
+		case len(b) == 1 && (b[0] == 'e' || b[0] == 13 /* Enter */):
+			t.editItem(t.cursor, destPath, &state)
 
 		case len(b) == 1 && b[0] == ' ':
-			checked[cursor] = !checked[cursor]
-
-		case len(b) == 1 && b[0] == 'k':
-			if cursor > 0 {
-				cursor--
+			if t.status[t.cursor] == tuiSkipped {
+				t.status[t.cursor] = tuiUnvisited
+			} else {
+				t.status[t.cursor] = tuiSkipped
 			}
 
 		case len(b) == 1 && b[0] == 'j':
-			if cursor < len(labels)-1 {
-				cursor++
+			if t.cursor < len(t.items)-1 {
+				t.cursor++
+				t.clampOffset()
 			}
 
-		case len(b) == 1 && b[0] == 'a':
-			allChecked := true
-			for _, c := range checked {
-				if !c {
-					allChecked = false
-					break
-				}
-			}
-			for i := range checked {
-				checked[i] = !allChecked
-			}
-
-		case len(b) >= 3 && b[0] == 27 && b[1] == '[' && b[2] == 'A': // Up arrow
-			if cursor > 0 {
-				cursor--
+		case len(b) == 1 && b[0] == 'k':
+			if t.cursor > 0 {
+				t.cursor--
+				t.clampOffset()
 			}
 
 		case len(b) >= 3 && b[0] == 27 && b[1] == '[' && b[2] == 'B': // Down arrow
-			if cursor < len(labels)-1 {
-				cursor++
+			if t.cursor < len(t.items)-1 {
+				t.cursor++
+				t.clampOffset()
+			}
+
+		case len(b) >= 3 && b[0] == 27 && b[1] == '[' && b[2] == 'A': // Up arrow
+			if t.cursor > 0 {
+				t.cursor--
+				t.clampOffset()
 			}
 		}
 	}
+	return nil
 }
 
 // parseSelection parses a selection string into sorted 1-based indices.

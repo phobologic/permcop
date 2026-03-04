@@ -8,6 +8,31 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// warnBroadAllowRules emits a stderr warning for any rule that combines
+// unknown_variable_action=allow with a broad allow pattern ("*" or "**").
+// Such rules silently permit any command containing a variable regardless of
+// what the variable expands to, which is almost always a misconfiguration.
+func warnBroadAllowRules(cfg *Config) {
+	for i := range cfg.Rules {
+		r := &cfg.Rules[i]
+		if cfg.EffectiveVariableAction(r) != VariableActionAllow {
+			continue
+		}
+		for _, p := range r.Allow {
+			if p.Pattern == "*" || p.Pattern == "**" {
+				name := r.Name
+				if name == "" {
+					name = fmt.Sprintf("rule[%d]", i)
+				}
+				fmt.Fprintf(os.Stderr,
+					"permcop: warning: rule %q: unknown_variable_action=allow with broad pattern %q is high risk\n",
+					name, p.Pattern)
+				break
+			}
+		}
+	}
+}
+
 const (
 	globalConfigPath = ".config/permcop/config.toml"
 	projectFileName  = ".permcop.toml"
@@ -30,6 +55,7 @@ func Load(cwd string) (*Config, error) {
 
 	merged := merge(global, project)
 	applyDefaults(merged)
+	warnBroadAllowRules(merged)
 	return merged, nil
 }
 
@@ -40,6 +66,7 @@ func LoadFile(path string) (*Config, error) {
 		return nil, err
 	}
 	applyDefaults(cfg)
+	warnBroadAllowRules(cfg)
 	return cfg, nil
 }
 

@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -308,6 +310,172 @@ func TestFindAndLoadProject_LoadsConfigBelowGitRoot(t *testing.T) {
 	}
 	if cfg == nil || len(cfg.Rules) == 0 || cfg.Rules[0].Name != "within repo" {
 		t.Errorf("expected config within repo to be loaded, got: %v", cfg)
+	}
+}
+
+// captureStderr temporarily replaces os.Stderr with a pipe and returns the
+// captured output after fn returns.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = orig
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	return buf.String()
+}
+
+func TestWarnBroadAllowRules_FiresForBroadAllowPattern(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[defaults]
+unknown_variable_action = "allow"
+
+[[rules]]
+name = "dangerous"
+allow = ["*"]
+`)
+
+	var cfg *Config
+	var loadErr error
+	got := captureStderr(t, func() {
+		cfg, loadErr = LoadFile(filepath.Join(dir, "config.toml"))
+	})
+	if loadErr != nil {
+		t.Fatalf("LoadFile: %v", loadErr)
+	}
+	_ = cfg
+
+	if !strings.Contains(got, `rule "dangerous"`) {
+		t.Errorf("expected warning mentioning rule name, got: %q", got)
+	}
+	if !strings.Contains(got, "unknown_variable_action=allow") {
+		t.Errorf("expected warning mentioning unknown_variable_action=allow, got: %q", got)
+	}
+	if !strings.Contains(got, `"*"`) {
+		t.Errorf("expected warning mentioning broad pattern, got: %q", got)
+	}
+}
+
+func TestWarnBroadAllowRules_FiresForDoubleStar(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[defaults]
+unknown_variable_action = "allow"
+
+[[rules]]
+name = "also dangerous"
+allow = ["**"]
+`)
+
+	var loadErr error
+	got := captureStderr(t, func() {
+		_, loadErr = LoadFile(filepath.Join(dir, "config.toml"))
+	})
+	if loadErr != nil {
+		t.Fatalf("LoadFile: %v", loadErr)
+	}
+	if !strings.Contains(got, "high risk") {
+		t.Errorf("expected high-risk warning, got: %q", got)
+	}
+}
+
+func TestWarnBroadAllowRules_SilentForNarrowPattern(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[defaults]
+unknown_variable_action = "allow"
+
+[[rules]]
+name = "narrow"
+allow = ["git log *"]
+`)
+
+	var loadErr error
+	got := captureStderr(t, func() {
+		_, loadErr = LoadFile(filepath.Join(dir, "config.toml"))
+	})
+	if loadErr != nil {
+		t.Fatalf("LoadFile: %v", loadErr)
+	}
+	if got != "" {
+		t.Errorf("expected no warning for narrow pattern, got: %q", got)
+	}
+}
+
+func TestWarnBroadAllowRules_SilentForDenyAction(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[defaults]
+unknown_variable_action = "deny"
+
+[[rules]]
+name = "broad but deny"
+allow = ["*"]
+`)
+
+	var loadErr error
+	got := captureStderr(t, func() {
+		_, loadErr = LoadFile(filepath.Join(dir, "config.toml"))
+	})
+	if loadErr != nil {
+		t.Fatalf("LoadFile: %v", loadErr)
+	}
+	if got != "" {
+		t.Errorf("expected no warning when variable_action=deny, got: %q", got)
+	}
+}
+
+func TestWarnBroadAllowRules_SilentForWarnAction(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[defaults]
+unknown_variable_action = "warn"
+
+[[rules]]
+name = "broad but warn"
+allow = ["*"]
+`)
+
+	var loadErr error
+	got := captureStderr(t, func() {
+		_, loadErr = LoadFile(filepath.Join(dir, "config.toml"))
+	})
+	if loadErr != nil {
+		t.Fatalf("LoadFile: %v", loadErr)
+	}
+	if got != "" {
+		t.Errorf("expected no warning when variable_action=warn, got: %q", got)
+	}
+}
+
+func TestWarnBroadAllowRules_RuleLevelOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[defaults]
+unknown_variable_action = "deny"
+
+[[rules]]
+name = "rule override allow"
+unknown_variable_action = "allow"
+allow = ["*"]
+`)
+
+	var loadErr error
+	got := captureStderr(t, func() {
+		_, loadErr = LoadFile(filepath.Join(dir, "config.toml"))
+	})
+	if loadErr != nil {
+		t.Fatalf("LoadFile: %v", loadErr)
+	}
+	if !strings.Contains(got, "high risk") {
+		t.Errorf("expected warning when rule overrides variable_action=allow, got: %q", got)
 	}
 }
 

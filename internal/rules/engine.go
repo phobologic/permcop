@@ -88,38 +88,62 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 	}
 
 	// --- Pass 1: Deny scan (all rules × all units) ---
-	// Only explicit deny patterns are evaluated here. Variable/subshell handling
-	// is deferred to Pass 2 so attribution is accurate.
+	// Only explicit deny patterns are evaluated here.
 	for i := range e.cfg.Rules {
 		r := &e.cfg.Rules[i]
 		for j := range parsed.Units {
 			u := &parsed.Units[j]
-
-			// Subshell check: deny immediately if the rule prohibits subshells
-			// and any unit contains one.
-			if e.cfg.EffectiveDenySubshells(r) && u.HasSubshell {
-				return deny("subshell not permitted", r.Name, "deny_subshells=true", u)
-			}
-
 			if matched, patStr := matchesDenyPattern(r, u); matched {
 				return deny("matched deny pattern", r.Name, patStr, u)
 			}
 		}
 	}
 
-	// --- Pass 2: Allow scan (all rules; ALL units must be covered by a single rule) ---
-	for i := range e.cfg.Rules {
-		r := &e.cfg.Rules[i]
-		allCovered, lastUnit, patStr, varWarning := allUnitsCovered(e.cfg, r, parsed.Units)
-		if allCovered {
-			if varWarning != "" {
-				return warnAllow(r.Name, patStr, lastUnit, varWarning)
+	// --- Pass 2: Allow scan (per-unit; each unit independently finds any covering rule) ---
+	// All units must be covered for the command to be allowed.
+	var lastUnit *parser.CheckableUnit
+	var lastPat, lastRule string
+	var warnReason string
+
+	for i := range parsed.Units {
+		u := &parsed.Units[i]
+		covered := false
+
+		for j := range e.cfg.Rules {
+			r := &e.cfg.Rules[j]
+
+			// Subshell: this rule's effective setting determines if it can cover the unit.
+			if e.cfg.EffectiveDenySubshells(r) && u.HasSubshell {
+				continue
 			}
-			return allow(r.Name, patStr, lastUnit)
+
+			// Variable: this rule's effective setting determines if it can cover the unit.
+			varAction := e.cfg.EffectiveVariableAction(r)
+			if u.HasVariable && varAction == config.VariableActionDeny {
+				continue
+			}
+
+			if ok, pat := unitCoveredByRule(e.cfg, r, *u); ok {
+				lastUnit = u
+				lastPat = pat
+				lastRule = r.Name
+				covered = true
+				if u.HasVariable && varAction == config.VariableActionWarn {
+					warnReason = "variable in command (unknown_variable_action=warn)"
+				}
+				break
+			}
+		}
+
+		if !covered {
+			return deny("no matching allow rule", "", "", u)
 		}
 	}
 
-	return deny("no matching allow rule", "", "", nil)
+	if warnReason != "" {
+		return warnAllow(lastRule, lastPat, lastUnit, warnReason)
+	}
+	return allow(lastRule, lastPat, lastUnit)
 }
 
 // CheckFile evaluates a direct file-access tool call (Read, Write, Edit, MultiEdit)
@@ -201,47 +225,6 @@ func matchesDenyPattern(r *config.Rule, u *parser.CheckableUnit) (bool, string) 
 	return false, ""
 }
 
-
-// allUnitsCovered returns true if every unit is covered by allow patterns in rule r.
-// It returns the last unit checked, the pattern that matched it, and an optional warning.
-func allUnitsCovered(cfg *config.Config, r *config.Rule, units []parser.CheckableUnit) (bool, *parser.CheckableUnit, string, string) {
-	var lastUnit *parser.CheckableUnit
-	var lastPat string
-	var warning string
-
-	for i := range units {
-		u := &units[i]
-
-		// Subshell: if rule denies subshells, this unit can't be covered by this rule.
-		if cfg.EffectiveDenySubshells(r) && u.HasSubshell {
-			return false, nil, "", ""
-		}
-
-		varAction := cfg.EffectiveVariableAction(r)
-
-		// Variable handling in allow pass
-		if u.HasVariable {
-			switch varAction {
-			case config.VariableActionDeny:
-				return false, nil, "", ""
-			case config.VariableActionWarn:
-				warning = "variable in command (unknown_variable_action=warn)"
-				// Continue checking — treat as allow candidate
-			case config.VariableActionAllow:
-				// Continue checking normally
-			}
-		}
-
-		covered, pat := unitCoveredByRule(cfg, r, *u)
-		if !covered {
-			return false, nil, "", ""
-		}
-		lastUnit = u
-		lastPat = pat
-	}
-
-	return true, lastUnit, lastPat, warning
-}
 
 func unitCoveredByRule(_ *config.Config, r *config.Rule, u parser.CheckableUnit) (bool, string) {
 	switch u.Kind {

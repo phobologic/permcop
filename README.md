@@ -9,7 +9,7 @@ permcop integrates as a Claude Code hook. Before Claude runs any Bash command or
 1. Parses the command into constituent units (chained commands, subshells, redirects)
 2. Runs a **two-pass evaluation** against your config:
    - **Pass 1 — Deny scan:** if any deny pattern matches any unit across all rules → DENY
-   - **Pass 2 — Allow scan:** if all units are covered by a single rule's allow patterns → ALLOW
+   - **Pass 2 — Allow scan:** each unit independently finds any rule that covers it; if all units are covered → ALLOW
    - **Default:** DENY (no match = blocked)
 3. Logs every decision to an audit log
 4. Exits `0` (allow) or `2` (deny) — Claude Code sees the exit code and acts accordingly
@@ -86,18 +86,36 @@ Commands containing `$VAR` or `$(...)` can't be safely evaluated at check time. 
 
 Override per rule with `unknown_variable_action = "warn"`. Similarly, `deny_subshells = true` blocks any command containing `$(...)` subshells.
 
-### Important: single-rule coverage
+### Per-unit coverage
 
-For a command to be allowed, **all parsed units must be covered by a single rule**. A chain like `echo hi > /tmp/out.txt` produces two units: the `echo` command and the `/tmp/out.txt` write. Both must be in the same rule's `allow` + `allow_write`:
+Each parsed unit is evaluated independently against all rules. A chain like `echo hi > /tmp/out.txt` produces two units: the `echo` command and the `/tmp/out.txt` write. Each unit finds any rule that covers it — they don't need to be in the same rule.
+
+This enables a "write zone" rule that applies broadly alongside specific command rules:
 
 ```toml
+# Specific command rule — covers the "git log" command unit
 [[rules]]
-name = "echo to tmp"
-allow       = [{ type = "prefix", pattern = "echo" }]
+name  = "git reads"
+allow = [{ type = "prefix", pattern = "git log" }]
+
+# Write zone — covers write units for any command
+[[rules]]
+name        = "write zone"
 allow_write = ["/tmp/**"]
 ```
 
-The same `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply uniformly to both contexts: shell redirections inside Bash commands, and direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls. A single rule can — and often should — cover both.
+With this config, `git log > /tmp/out.txt` is allowed: the command unit matches `git reads`, the write unit matches `write zone`.
+
+To restrict specific file paths for a command, use `deny_write` in that command's rule — deny patterns from Pass 1 always win:
+
+```toml
+[[rules]]
+name       = "echo to tmp"
+allow      = [{ type = "prefix", pattern = "echo" }]
+deny_write = ["/tmp/secrets/**"]
+```
+
+The same `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply uniformly to both contexts: shell redirections inside Bash commands, and direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls.
 
 ## Tools governed
 

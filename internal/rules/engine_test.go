@@ -287,8 +287,8 @@ func TestEngine_DenySubshells(t *testing.T) {
 func TestEngine_RedirectAllowRead(t *testing.T) {
 	t.Parallel()
 
-	// A rule must cover ALL units (command + file redirect) to allow the command.
-	// allow_read alone doesn't cover the "cat" command unit.
+	// Both command and read units must be covered (each by any rule).
+	// This rule covers both: allow covers "cat", allow_read covers the file.
 	e := newTestEngine(t, []config.Rule{
 		{
 			Name:      "cat project files",
@@ -302,13 +302,13 @@ func TestEngine_RedirectAllowRead(t *testing.T) {
 		t.Errorf("expected ALLOW for read within allowed path, got DENY: %s", r.Reason)
 	}
 
-	// Rule with only allow_read cannot cover the command unit — deny.
+	// No rule covers the "cat" command unit → deny.
 	e2 := newTestEngine(t, []config.Rule{
 		{Name: "read only rule", AllowRead: []string{"/project/**"}},
 	}, nil)
 	r2, _ := e2.Check("cat < /project/src/main.go", "/tmp")
 	if r2.Allowed {
-		t.Error("expected DENY: rule has allow_read but no allow command pattern for 'cat'")
+		t.Error("expected DENY: no rule covers the 'cat' command unit")
 	}
 }
 
@@ -357,10 +357,7 @@ func TestEngine_ParseError(t *testing.T) {
 func TestEngine_RedirectDenyWriteInsideAllowedDir(t *testing.T) {
 	t.Parallel()
 
-	// Two separate rules: one for the command, one for the write.
-	// Both units must be covered by a single rule — or each by separate rules?
-	// Actually in the two-pass model, all units must be covered by ONE rule's allows.
-	// This is a limitation: you need a single rule that covers both the command and its redirects.
+	// A single rule covers both the command and the write unit.
 	e := newTestEngine(t, []config.Rule{
 		{
 			Name:       "echo to tmp",
@@ -375,12 +372,12 @@ func TestEngine_RedirectDenyWriteInsideAllowedDir(t *testing.T) {
 	}
 }
 
-func TestEngine_AllUnitsMustMatchSingleRule(t *testing.T) {
+func TestEngine_MultiRuleCoverage(t *testing.T) {
 	t.Parallel()
 
 	// Rule A covers "echo" commands, Rule B covers writes to /tmp.
-	// A chain "echo hi > /tmp/out.txt" has two units: the command and the write.
-	// Neither rule alone covers both units — should deny.
+	// With per-unit evaluation, each unit independently finds any covering rule.
+	// The command unit is covered by Rule A, the write unit by Rule B → ALLOW.
 	e := newTestEngine(t, []config.Rule{
 		{
 			Name:  "echo only",
@@ -393,8 +390,82 @@ func TestEngine_AllUnitsMustMatchSingleRule(t *testing.T) {
 	}, nil)
 
 	r, _ := e.Check("echo hi > /tmp/out.txt", "/tmp")
+	if !r.Allowed {
+		t.Errorf("expected ALLOW: each unit covered by a different rule, got DENY: %s", r.Reason)
+	}
+}
+
+func TestEngine_MultiRuleCoverage_MissingWriteRule(t *testing.T) {
+	t.Parallel()
+
+	// Rule covers the command but there is no rule covering the write unit → DENY.
+	e := newTestEngine(t, []config.Rule{
+		{
+			Name:  "echo only",
+			Allow: []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+		},
+	}, nil)
+
+	r, _ := e.Check("echo hi > /tmp/out.txt", "/tmp")
 	if r.Allowed {
-		t.Error("expected DENY: no single rule covers both the command and the redirect")
+		t.Error("expected DENY: write unit has no covering rule")
+	}
+}
+
+func TestEngine_WriteZoneAndCommandRule(t *testing.T) {
+	t.Parallel()
+
+	// Global write-zone rule + separate command rule.
+	// "git log > /tmp/out.txt" has two units: "git log" command and "/tmp/out.txt" write.
+	// Command covered by git rule, write covered by write-zone rule → ALLOW.
+	e := newTestEngine(t, []config.Rule{
+		{
+			Name:  "git reads",
+			Allow: []config.Pattern{{Type: config.PatternPrefix, Pattern: "git log"}},
+		},
+		{
+			Name:       "write zone",
+			AllowWrite: []string{"/tmp/**"},
+		},
+	}, nil)
+
+	r, _ := e.Check("git log > /tmp/out.txt", "/tmp")
+	if !r.Allowed {
+		t.Errorf("expected ALLOW (git command + write zone), got DENY: %s", r.Reason)
+	}
+
+	// Without the write-zone rule, the write unit is uncovered → DENY.
+	e2 := newTestEngine(t, []config.Rule{
+		{
+			Name:  "git reads",
+			Allow: []config.Pattern{{Type: config.PatternPrefix, Pattern: "git log"}},
+		},
+	}, nil)
+	r2, _ := e2.Check("git log > /tmp/out.txt", "/tmp")
+	if r2.Allowed {
+		t.Error("expected DENY: no rule covers the write unit")
+	}
+}
+
+func TestEngine_VariableWarnCoveredByRule(t *testing.T) {
+	t.Parallel()
+
+	// Unit with variable is covered by a rule with unknown_variable_action=warn → WARN-allow.
+	warnAction := config.VariableActionWarn
+	e := newTestEngine(t, []config.Rule{
+		{
+			Name:           "echo with warn",
+			Allow:          []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+			VariableAction: warnAction,
+		},
+	}, &config.Defaults{UnknownVariableAction: config.VariableActionDeny})
+
+	r, _ := e.Check("echo $SECRET", "/tmp")
+	if !r.Allowed {
+		t.Errorf("expected ALLOW (warn), got DENY: %s", r.Reason)
+	}
+	if r.Decision != audit.DecisionWarn {
+		t.Errorf("expected WARN decision, got %q", r.Decision)
 	}
 }
 

@@ -136,11 +136,8 @@ func compileGlobPaths(patterns []string, homeDir string) []compiledGlobPath {
 // Result is the outcome of evaluating a command against the rule set.
 type Result struct {
 	audit.Entry
-	Allowed bool
-	// DefaultDeny is true when the command was denied solely because no allow
-	// rule matched (as opposed to an explicit deny pattern match). Only
-	// default-deny results are eligible for the interactive prompt flow.
-	DefaultDeny bool
+	Allowed     bool
+	FallThrough bool // true when no allow rule matched; defer to Claude Code
 }
 
 // Engine evaluates commands against a config.
@@ -270,7 +267,11 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 	}
 
 	// --- Pass 1: Deny scan (all rules × all units) ---
-	// Only explicit deny patterns are evaluated here.
+	// Collect all deny hits before returning so RuleMatches is complete.
+	var denyMatches []audit.RuleMatch
+	var firstDenyOrig *parser.CheckableUnit
+	var firstDenyRule, firstDenyPat string
+
 	for i := range e.compiledRules {
 		cr := e.compiledRules[i]
 		for j := range parsed.Units {
@@ -285,9 +286,23 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				u.HasVariable = false
 			}
 			if matched, patStr := matchesDenyPattern(cr, &u); matched {
-				return deny("matched deny pattern", cr.rule.Name, patStr, &u)
+				denyMatches = append(denyMatches, audit.RuleMatch{
+					Rule:    cr.rule.Name,
+					Pattern: patStr,
+					Unit:    u.Value,
+					Action:  "deny",
+				})
+				if firstDenyOrig == nil {
+					firstDenyOrig = &parsed.Units[j]
+					firstDenyRule = cr.rule.Name
+					firstDenyPat = patStr
+				}
 			}
 		}
+	}
+	if len(denyMatches) > 0 {
+		entry.RuleMatches = denyMatches
+		return deny("matched deny pattern", firstDenyRule, firstDenyPat, firstDenyOrig)
 	}
 
 	// --- Pass 2: Allow scan (per-unit; each unit independently finds any covering rule) ---
@@ -295,6 +310,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 	var lastUnit *parser.CheckableUnit
 	var lastPat, lastRule string
 	var warnReason string
+	var allowMatches []audit.RuleMatch
 
 	for i := range parsed.Units {
 		orig := &parsed.Units[i]
@@ -332,6 +348,12 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				lastPat = pat
 				lastRule = cr.rule.Name
 				covered = true
+				allowMatches = append(allowMatches, audit.RuleMatch{
+					Rule:    cr.rule.Name,
+					Pattern: pat,
+					Unit:    u.Value,
+					Action:  "allow",
+				})
 				if u.HasVariable && varAction == config.VariableActionWarn {
 					warnReason = "variable in command (unknown_variable_action=warn)"
 				}
@@ -340,14 +362,21 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 		}
 
 		if !covered {
+			allowMatches = append(allowMatches, audit.RuleMatch{
+				Rule:   "",
+				Unit:   orig.Value,
+				Action: "deny",
+			})
+			entry.RuleMatches = allowMatches
 			r, err := deny("no matching allow rule", "", "", orig)
 			if r != nil {
-				r.DefaultDeny = true
+				r.FallThrough = true
 			}
 			return r, err
 		}
 	}
 
+	entry.RuleMatches = allowMatches
 	if warnReason != "" {
 		return warnAllow(lastRule, lastPat, lastUnit, warnReason)
 	}
@@ -388,25 +417,51 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 		return deny("empty file path", "", "")
 	}
 
-	// Pass 1: Deny scan
+	// Pass 1: Deny scan — collect all hits before returning.
+	var denyMatchesFile []audit.RuleMatch
+	var firstDenyRuleFile, firstDenyPatFile string
+
 	for i := range e.compiledRules {
 		cr := e.compiledRules[i]
 		if matched, patStr := matchesDenyPattern(cr, &unit); matched {
-			return deny("matched deny pattern", cr.rule.Name, patStr)
+			denyMatchesFile = append(denyMatchesFile, audit.RuleMatch{
+				Rule:    cr.rule.Name,
+				Pattern: patStr,
+				Unit:    unit.Value,
+				Action:  "deny",
+			})
+			if firstDenyRuleFile == "" {
+				firstDenyRuleFile = cr.rule.Name
+				firstDenyPatFile = patStr
+			}
 		}
+	}
+	if len(denyMatchesFile) > 0 {
+		entry.RuleMatches = denyMatchesFile
+		return deny("matched deny pattern", firstDenyRuleFile, firstDenyPatFile)
 	}
 
 	// Pass 2: Allow scan (file-only rules can cover a single file unit)
 	for i := range e.compiledRules {
 		cr := e.compiledRules[i]
 		if covered, pat := unitCoveredByRule(cr, unit); covered {
+			entry.RuleMatches = []audit.RuleMatch{{
+				Rule:    cr.rule.Name,
+				Pattern: pat,
+				Unit:    unit.Value,
+				Action:  "allow",
+			}}
 			return allow(cr.rule.Name, pat)
 		}
 	}
 
+	entry.RuleMatches = []audit.RuleMatch{{
+		Unit:   unit.Value,
+		Action: "deny",
+	}}
 	r, err := deny("no matching allow rule", "", "")
 	if r != nil {
-		r.DefaultDeny = true
+		r.FallThrough = true
 	}
 	return r, err
 }

@@ -16,21 +16,31 @@ import (
 type Decision string
 
 const (
-	DecisionAllow Decision = "ALLOW"
-	DecisionDeny  Decision = "DENY"
-	DecisionWarn  Decision = "WARN" // allowed but with variable warning
+	DecisionAllow       Decision = "ALLOW"
+	DecisionDeny        Decision = "DENY"
+	DecisionWarn        Decision = "WARN" // allowed but with variable warning
+	DecisionPassThrough Decision = "PASS" // no rule matched; deferred to Claude Code
 )
+
+// RuleMatch records how one unit was evaluated.
+type RuleMatch struct {
+	Rule    string // rule name; empty string = "default-deny"
+	Pattern string // matched pattern; empty for default-deny
+	Unit    string // the unit value (expanded if applicable)
+	Action  string // "allow" or "deny"
+}
 
 // Entry captures everything about a single permission decision.
 type Entry struct {
 	Timestamp       time.Time
 	Decision        Decision
 	Reason          string
-	DecidingRule    string // name of the rule that made the call; empty if no rule matched
-	DecidingPattern string // pattern string that matched; empty if safety check triggered
+	DecidingRule    string                // name of the rule that made the call; empty if no rule matched
+	DecidingPattern string                // pattern string that matched; empty if safety check triggered
 	DecidingUnit    *parser.CheckableUnit // the specific unit that triggered the decision
 	OriginalCommand string
 	Units           []parser.CheckableUnit
+	RuleMatches     []RuleMatch // per-unit match details; populated by the engine
 }
 
 // Logger writes audit entries to a file.
@@ -131,6 +141,19 @@ func textLine(e Entry) string {
 		sb.WriteString(fmt.Sprintf("  hit:      %s\n", e.DecidingUnit.Value))
 	}
 
+	if len(e.RuleMatches) > 0 {
+		sb.WriteString("  matches:\n")
+		for _, m := range e.RuleMatches {
+			if m.Action == "allow" {
+				sb.WriteString(fmt.Sprintf("    allow  [%s]  rule=%q  pattern=%q\n", m.Unit, m.Rule, m.Pattern))
+			} else if m.Rule == "" {
+				sb.WriteString(fmt.Sprintf("    deny   [%s]  (default deny)\n", m.Unit))
+			} else {
+				sb.WriteString(fmt.Sprintf("    deny   [%s]  rule=%q  pattern=%q\n", m.Unit, m.Rule, m.Pattern))
+			}
+		}
+	}
+
 	return strings.TrimRight(sb.String(), "\n")
 }
 
@@ -159,6 +182,19 @@ func jsonLine(e Entry) (string, error) {
 		unitVals[i] = u.Value
 	}
 	obj["units"] = unitVals
+
+	if len(e.RuleMatches) > 0 {
+		matches := make([]map[string]string, len(e.RuleMatches))
+		for i, m := range e.RuleMatches {
+			matches[i] = map[string]string{
+				"rule":    m.Rule,
+				"pattern": m.Pattern,
+				"unit":    m.Unit,
+				"action":  m.Action,
+			}
+		}
+		obj["rule_matches"] = matches
+	}
 
 	b, err := json.Marshal(obj)
 	if err != nil {

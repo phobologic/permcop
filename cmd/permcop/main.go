@@ -553,19 +553,27 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 		os.Exit(1)
 	}
 
-	// Resolve source path
-	if sourcePath == "" {
-		if global {
-			sourcePath = filepath.Join(home, ".claude", "settings.json")
-			if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
-				sourcePath = filepath.Join(home, ".claude", "settings.local.json")
+	// Resolve source paths (both settings.json and settings.local.json are
+	// merged so that permissions split across the two files are all imported).
+	var sourcePaths []string
+	if sourcePath != "" {
+		sourcePaths = []string{sourcePath}
+	} else if global {
+		for _, name := range []string{"settings.json", "settings.local.json"} {
+			p := filepath.Join(home, ".claude", name)
+			if _, err := os.Stat(p); err == nil {
+				sourcePaths = append(sourcePaths, p)
 			}
-		} else {
-			sourcePath = findProjectClaudeSettings(cwd)
-			if sourcePath == "" {
-				fmt.Fprintln(os.Stderr, "error: .claude/settings.json not found (searched from CWD to git root); use --global or provide a path")
-				os.Exit(1)
-			}
+		}
+		if len(sourcePaths) == 0 {
+			fmt.Fprintln(os.Stderr, "error: neither ~/.claude/settings.json nor ~/.claude/settings.local.json found")
+			os.Exit(1)
+		}
+	} else {
+		sourcePaths = findProjectClaudeSettings(cwd)
+		if len(sourcePaths) == 0 {
+			fmt.Fprintln(os.Stderr, "error: .claude/settings.json not found (searched from CWD to git root); use --global or provide a path")
+			os.Exit(1)
 		}
 	}
 
@@ -577,7 +585,7 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 		destPath = filepath.Join(cwd, ".permcop.toml")
 	}
 
-	result, err := importer.FromFile(sourcePath)
+	result, err := importer.FromFiles(sourcePaths)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "import error: %v\n", err)
 		os.Exit(1)
@@ -595,14 +603,14 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 		return
 	}
 
-	content := fmt.Sprintf("# Imported from: %s\n", sourcePath) +
+	content := fmt.Sprintf("# Imported from: %s\n", strings.Join(sourcePaths, ", ")) +
 		"# NOTE: each unit in a command (subcommands, redirects) must be covered\n" +
 		"# by at least one rule, but different units can match different rules.\n" +
 		"# Review and adjust before using.\n\n" +
 		importer.RulesToTOML(result.Rules)
 
 	if dryRun {
-		fmt.Fprintf(os.Stderr, "Source: %s\n", sourcePath)
+		fmt.Fprintf(os.Stderr, "Source: %s\n", strings.Join(sourcePaths, ", "))
 		fmt.Fprintf(os.Stderr, "Dest:   %s (dry-run; not written)\n", destPath)
 		fmt.Print(content)
 		return
@@ -639,17 +647,23 @@ func runImportClaudeSettings(global, dryRun bool, sourcePath string) {
 }
 
 // findProjectClaudeSettings walks from cwd upward (stopping at .git or home)
-// looking for .claude/settings.json or .claude/settings.local.json (in that
-// order of preference). Returns empty string if neither is found.
-func findProjectClaudeSettings(cwd string) string {
+// looking for .claude/settings.json and/or .claude/settings.local.json. It
+// returns all files found at the first directory level that contains either
+// file, so that both are merged by the caller. Returns nil if neither is found
+// at any level.
+func findProjectClaudeSettings(cwd string) []string {
 	home, _ := os.UserHomeDir()
 	dir := cwd
 	for {
+		var found []string
 		for _, name := range []string{"settings.json", "settings.local.json"} {
 			candidate := filepath.Join(dir, ".claude", name)
 			if _, err := os.Stat(candidate); err == nil {
-				return candidate
+				found = append(found, candidate)
 			}
+		}
+		if len(found) > 0 {
+			return found
 		}
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			break
@@ -659,7 +673,7 @@ func findProjectClaudeSettings(cwd string) string {
 		}
 		dir = filepath.Dir(dir)
 	}
-	return ""
+	return nil
 }
 
 // confirmAppend prints the content to be appended with a + prefix per line,

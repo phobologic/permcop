@@ -287,6 +287,64 @@ func TestFromFile(t *testing.T) {
 	}
 }
 
+func TestFromFiles_MergesTwoFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	settingsJSON := `{"permissions": {"allow": ["Bash(git log *)"], "deny": []}}`
+	localJSON := `{"permissions": {"allow": ["Bash(npm run test)"], "deny": ["Bash(rm -rf *)"]}}`
+
+	pathA := filepath.Join(dir, "settings.json")
+	pathB := filepath.Join(dir, "settings.local.json")
+	if err := os.WriteFile(pathA, []byte(settingsJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathB, []byte(localJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := FromFiles([]string{pathA, pathB})
+	if err != nil {
+		t.Fatalf("FromFiles: %v", err)
+	}
+
+	// Both "git" and "npm" groups should be present.
+	names := make(map[string]bool)
+	for _, r := range result.Rules {
+		names[r.Name] = true
+	}
+	if !names["Imported: git"] {
+		t.Error("expected rule 'Imported: git' from settings.json")
+	}
+	if !names["Imported: npm"] {
+		t.Error("expected rule 'Imported: npm' from settings.local.json")
+	}
+	// The deny from settings.local.json should appear in the rm rule.
+	if !names["Imported: rm"] {
+		t.Error("expected rule 'Imported: rm' (deny) from settings.local.json")
+	}
+}
+
+func TestFromFiles_SingleFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	settingsJSON := `{"permissions": {"allow": ["Bash(make build)"], "deny": []}}`
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(settingsJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := FromFiles([]string{path})
+	if err != nil {
+		t.Fatalf("FromFiles: %v", err)
+	}
+	if len(result.Rules) != 1 {
+		t.Errorf("expected 1 rule, got %d", len(result.Rules))
+	}
+}
+
 func TestFromFile_MissingFile(t *testing.T) {
 	t.Parallel()
 

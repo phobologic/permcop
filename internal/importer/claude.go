@@ -32,17 +32,28 @@ type ImportResult struct {
 // FromFile reads a Claude Code settings.json file and converts its permission
 // rules to permcop rules.
 func FromFile(path string) (*ImportResult, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
+	return FromFiles([]string{path})
+}
 
-	var settings ClaudeSettings
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+// FromFiles reads one or more Claude Code settings files, merges their
+// permission entries, and converts the result to permcop rules. This mirrors
+// how Claude Code itself combines settings.json and settings.local.json.
+func FromFiles(paths []string) (*ImportResult, error) {
+	var merged ClaudePermissions
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		var settings ClaudeSettings
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		merged.Allow = append(merged.Allow, settings.Permissions.Allow...)
+		merged.Ask = append(merged.Ask, settings.Permissions.Ask...)
+		merged.Deny = append(merged.Deny, settings.Permissions.Deny...)
 	}
-
-	return Convert(settings.Permissions)
+	return Convert(merged)
 }
 
 // Convert translates Claude Code permission entries into permcop rules.

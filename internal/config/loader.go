@@ -69,6 +69,9 @@ func loadFile(relOrAbsPath string, missingOK bool) (*Config, error) {
 }
 
 // findAndLoadProject walks from cwd up to home dir looking for .permcop.toml.
+// Walking stops at a git repository root (.git directory) to prevent a
+// .permcop.toml planted in a parent directory from weakening deny rules for
+// unrelated projects (confused-deputy / directory-traversal class of issue).
 func findAndLoadProject(cwd string) (*Config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -80,6 +83,12 @@ func findAndLoadProject(cwd string) (*Config, error) {
 		candidate := filepath.Join(dir, projectFileName)
 		if _, err := os.Stat(candidate); err == nil {
 			return loadFile(candidate, false)
+		}
+
+		// Stop at the git repository root so that a .permcop.toml in a
+		// parent directory cannot override rules for projects inside this repo.
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			break
 		}
 
 		if dir == home || dir == filepath.Dir(dir) {

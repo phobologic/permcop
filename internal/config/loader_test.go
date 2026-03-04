@@ -232,6 +232,85 @@ allow = ["git status"]
 	}
 }
 
+func TestFindAndLoadProject_StopsAtGitRoot(t *testing.T) {
+	t.Parallel()
+
+	// Layout:
+	//   root/                    ← .permcop.toml here (above git root)
+	//   root/repo/.git/          ← git root boundary
+	//   root/repo/subdir/        ← CWD for the search
+	root := t.TempDir()
+	gitRoot := filepath.Join(root, "repo")
+	subdir := filepath.Join(gitRoot, "subdir")
+	for _, d := range []string{filepath.Join(gitRoot, ".git"), subdir} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// .permcop.toml in root (above the git boundary) — must NOT be loaded.
+	writeConfig(t, root, projectFileName, `[[rules]]`+"\n"+"name = \"above git root\"")
+
+	cfg, err := findAndLoadProject(subdir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg != nil {
+		t.Errorf("expected nil config (traversal should stop at git root), got rules: %v", cfg.Rules)
+	}
+}
+
+func TestFindAndLoadProject_LoadsConfigAtGitRoot(t *testing.T) {
+	t.Parallel()
+
+	// Layout:
+	//   repo/.git/
+	//   repo/.permcop.toml       ← should be found
+	//   repo/subdir/             ← CWD
+	root := t.TempDir()
+	gitDir := filepath.Join(root, ".git")
+	subdir := filepath.Join(root, "subdir")
+	for _, d := range []string{gitDir, subdir} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(t, root, projectFileName, "[[rules]]\nname = \"at git root\"")
+
+	cfg, err := findAndLoadProject(subdir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg == nil || len(cfg.Rules) == 0 || cfg.Rules[0].Name != "at git root" {
+		t.Errorf("expected config at git root to be loaded, got: %v", cfg)
+	}
+}
+
+func TestFindAndLoadProject_LoadsConfigBelowGitRoot(t *testing.T) {
+	t.Parallel()
+
+	// Layout:
+	//   repo/.git/
+	//   repo/subdir/.permcop.toml  ← should be found (within the repo)
+	//   repo/subdir/deep/          ← CWD
+	root := t.TempDir()
+	subdir := filepath.Join(root, "subdir")
+	deep := filepath.Join(subdir, "deep")
+	for _, d := range []string{filepath.Join(root, ".git"), deep} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(t, subdir, projectFileName, "[[rules]]\nname = \"within repo\"")
+
+	cfg, err := findAndLoadProject(deep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg == nil || len(cfg.Rules) == 0 || cfg.Rules[0].Name != "within repo" {
+		t.Errorf("expected config within repo to be loaded, got: %v", cfg)
+	}
+}
+
 func TestPatternUnmarshal_UnknownType(t *testing.T) {
 	t.Parallel()
 

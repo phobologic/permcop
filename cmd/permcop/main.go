@@ -414,24 +414,24 @@ func runInit(global bool) {
 			os.Exit(1)
 		}
 		fmt.Println("Create global config as:")
-		fmt.Printf("  [1] Shared (%s) — used in all sessions\n", filepath.Join(cfgDir, "config.toml"))
-		fmt.Printf("  [2] Local  (%s) — personal overlay\n", filepath.Join(cfgDir, "config.local.toml"))
+		fmt.Printf("  [1] Local  (%s) — personal overlay\n", filepath.Join(cfgDir, "config.local.toml"))
+		fmt.Printf("  [2] Shared (%s) — used in all sessions\n", filepath.Join(cfgDir, "config.toml"))
 		if promptChoice("Choice [1/2] (default: 1): ", 2) == 2 {
-			cfgPath = filepath.Join(cfgDir, "config.local.toml")
-		} else {
 			cfgPath = filepath.Join(cfgDir, "config.toml")
+		} else {
+			cfgPath = filepath.Join(cfgDir, "config.local.toml")
 		}
 	} else {
 		if _, err := os.Stat(filepath.Join(cwd, ".git")); os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "warning: no .git directory in %s; creating config here anyway\n", cwd)
 		}
 		fmt.Println("Create project config as:")
-		fmt.Printf("  [1] Shared (.permcop.toml)       — committed to repo; team policy\n")
-		fmt.Printf("  [2] Local  (.permcop.local.toml) — gitignored; personal overlay\n")
+		fmt.Printf("  [1] Local  (.permcop.local.toml) — gitignored; personal overlay\n")
+		fmt.Printf("  [2] Shared (.permcop.toml)       — committed to repo; team policy\n")
 		if promptChoice("Choice [1/2] (default: 1): ", 2) == 2 {
-			cfgPath = filepath.Join(cwd, ".permcop.local.toml")
-		} else {
 			cfgPath = filepath.Join(cwd, ".permcop.toml")
+		} else {
+			cfgPath = filepath.Join(cwd, ".permcop.local.toml")
 		}
 	}
 

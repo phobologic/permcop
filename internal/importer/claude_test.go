@@ -3,6 +3,7 @@ package importer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mikecafarella/permcop/internal/config"
@@ -250,28 +251,9 @@ func TestRulesToTOML(t *testing.T) {
 		`"./src/**"`,
 		`"./.env"`,
 	} {
-		if !containsString(toml, want) {
+		if !strings.Contains(toml, want) {
 			t.Errorf("TOML output missing %q\nGot:\n%s", want, toml)
 		}
 	}
 }
 
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsRuneSlice([]rune(s), []rune(substr)))
-}
-
-func containsRuneSlice(s, substr []rune) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		match := true
-		for j := range substr {
-			if s[i+j] != substr[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
-}

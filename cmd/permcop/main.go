@@ -72,7 +72,13 @@ func main() {
 // tool call, writes a human-readable reason to stdout on deny, and exits 0 or 2.
 // All failures — including unrecognized hook format — are fail-closed (deny) and logged.
 func runCheck() {
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		// Fail-closed: cannot determine CWD means file path resolution is unsafe.
+		// Log to stdout (deny channel) before the audit logger is available.
+		fmt.Fprintf(os.Stdout, "permcop: cannot determine working directory: %v\n", err)
+		os.Exit(2)
+	}
 
 	// Load config early so we can log everything, including hook parse failures.
 	cfg, cfgErr := config.Load(cwd)
@@ -168,7 +174,11 @@ func absolutePath(path, cwd string) string {
 
 // runExplain performs a dry-run evaluation and prints a human-readable trace.
 func runExplain(command string) {
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot determine working directory: %v\n", err)
+		os.Exit(1)
+	}
 	cfg, err := config.Load(cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)

@@ -46,19 +46,37 @@ func FromFile(path string) (*ImportResult, error) {
 }
 
 // Convert translates Claude Code permission entries into permcop rules.
-// It produces one rule grouping all Bash allows/denies, and separate rules
-// for file-access (Read/Edit) allows/denies. Unrecognised tool types are
-// reported in the Skipped field.
+// Bash entries are grouped by the first word of the command pattern into
+// separate named rules (e.g. "Imported: git", "Imported: make"). Wildcard
+// and unparseable patterns land in "Imported: (other)", always emitted last.
+// File-access entries (Read/Edit/Write) produce a single "Imported: file access"
+// rule. Unrecognised tool types are reported in the Skipped field.
 func Convert(perms ClaudePermissions) (*ImportResult, error) {
 	result := &ImportResult{}
 
-	// Collect parsed entries per tool type
-	bashAllow := []string{}
-	bashDeny := []string{}
-	readAllow := []string{}
-	readDeny := []string{}
-	writeAllow := []string{}
-	writeDeny := []string{}
+	// bashGroup holds patterns collected under one command-prefix key.
+	type bashGroup struct {
+		allow []config.Pattern
+		deny  []config.Pattern
+	}
+	bashGroups := map[string]*bashGroup{}
+	var bashOrder []string // insertion order; "(other)" is appended last
+
+	addBash := func(prefix string, p config.Pattern, isDeny bool) {
+		if _, ok := bashGroups[prefix]; !ok {
+			bashGroups[prefix] = &bashGroup{}
+			if prefix != "(other)" {
+				bashOrder = append(bashOrder, prefix)
+			}
+		}
+		if isDeny {
+			bashGroups[prefix].deny = append(bashGroups[prefix].deny, p)
+		} else {
+			bashGroups[prefix].allow = append(bashGroups[prefix].allow, p)
+		}
+	}
+
+	var readAllow, readDeny, writeAllow, writeDeny []string
 
 	for _, entry := range perms.Allow {
 		tool, pattern, ok := parseEntry(entry)
@@ -68,7 +86,7 @@ func Convert(perms ClaudePermissions) (*ImportResult, error) {
 		}
 		switch tool {
 		case "Bash":
-			bashAllow = append(bashAllow, pattern)
+			addBash(groupPrefix(pattern), toPattern(pattern), false)
 		case "Read":
 			readAllow = append(readAllow, pattern)
 		case "Edit", "Write", "MultiEdit":
@@ -86,7 +104,7 @@ func Convert(perms ClaudePermissions) (*ImportResult, error) {
 		}
 		switch tool {
 		case "Bash":
-			bashDeny = append(bashDeny, pattern)
+			addBash(groupPrefix(pattern), toPattern(pattern), true)
 		case "Read":
 			readDeny = append(readDeny, pattern)
 		case "Edit", "Write", "MultiEdit":
@@ -102,31 +120,29 @@ func Convert(perms ClaudePermissions) (*ImportResult, error) {
 			fmt.Sprintf("ask rule %q has no permcop equivalent — omitted (consider adding to allow or deny)", entry))
 	}
 
-	// Build permcop rules
-	if len(bashAllow) > 0 || len(bashDeny) > 0 {
-		rule := config.Rule{
-			Name:        "Imported bash rules (from Claude Code settings)",
-			Description: "Automatically imported from Claude Code permissions.allow/deny",
-		}
-		for _, p := range bashAllow {
-			rule.Allow = append(rule.Allow, toPattern(p))
-		}
-		for _, p := range bashDeny {
-			rule.Deny = append(rule.Deny, toPattern(p))
-		}
-		result.Rules = append(result.Rules, rule)
+	// Emit one rule per bash group; "(other)" always goes last.
+	if _, hasOther := bashGroups["(other)"]; hasOther {
+		bashOrder = append(bashOrder, "(other)")
+	}
+	for _, prefix := range bashOrder {
+		g := bashGroups[prefix]
+		result.Rules = append(result.Rules, config.Rule{
+			Name:        "Imported: " + prefix,
+			Description: "Automatically imported from Claude Code permissions",
+			Allow:       g.allow,
+			Deny:        g.deny,
+		})
 	}
 
 	if len(readAllow) > 0 || len(readDeny) > 0 || len(writeAllow) > 0 || len(writeDeny) > 0 {
-		rule := config.Rule{
-			Name:        "Imported file access rules (from Claude Code settings)",
+		result.Rules = append(result.Rules, config.Rule{
+			Name:        "Imported: file access",
 			Description: "Automatically imported from Claude Code Read/Edit permissions",
 			AllowRead:   readAllow,
 			DenyRead:    readDeny,
 			AllowWrite:  writeAllow,
 			DenyWrite:   writeDeny,
-		}
-		result.Rules = append(result.Rules, rule)
+		})
 	}
 
 	if len(result.Rules) == 0 && len(result.Skipped) == 0 {
@@ -134,6 +150,25 @@ func Convert(perms ClaudePermissions) (*ImportResult, error) {
 	}
 
 	return result, nil
+}
+
+// groupPrefix extracts the first whitespace-delimited word of a glob pattern
+// for use as a bash rule group key. A leading "./" is stripped so that
+// "./permcop" and "permcop" land in the same group. Returns "(other)" for
+// wildcards or empty patterns.
+func groupPrefix(pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	pattern = strings.TrimPrefix(pattern, "./")
+	if pattern == "" || pattern == "*" {
+		return "(other)"
+	}
+	if idx := strings.IndexAny(pattern, " \t:"); idx > 0 {
+		pattern = pattern[:idx]
+	}
+	if pattern == "" || pattern == "*" {
+		return "(other)"
+	}
+	return pattern
 }
 
 // parseEntry splits a Claude Code rule string like "Bash(git log *)" into

@@ -61,22 +61,39 @@ func TestConvert_BashRules(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(result.Rules) != 1 {
-		t.Fatalf("expected 1 bash rule, got %d", len(result.Rules))
+	// Two groups: "git" (2 allow, 1 deny) and "rm" (0 allow, 1 deny)
+	if len(result.Rules) != 2 {
+		t.Fatalf("expected 2 bash rules (one per prefix), got %d", len(result.Rules))
 	}
 
-	r := result.Rules[0]
-	if len(r.Allow) != 2 {
-		t.Errorf("allow: got %d patterns, want 2", len(r.Allow))
+	git := result.Rules[0]
+	if git.Name != "Imported: git" {
+		t.Errorf("rule[0] name: got %q, want %q", git.Name, "Imported: git")
 	}
-	if len(r.Deny) != 2 {
-		t.Errorf("deny: got %d patterns, want 2", len(r.Deny))
+	if len(git.Allow) != 2 {
+		t.Errorf("git allow: got %d patterns, want 2", len(git.Allow))
+	}
+	if len(git.Deny) != 1 {
+		t.Errorf("git deny: got %d patterns, want 1", len(git.Deny))
+	}
+
+	rm := result.Rules[1]
+	if rm.Name != "Imported: rm" {
+		t.Errorf("rule[1] name: got %q, want %q", rm.Name, "Imported: rm")
+	}
+	if len(rm.Allow) != 0 {
+		t.Errorf("rm allow: got %d patterns, want 0", len(rm.Allow))
+	}
+	if len(rm.Deny) != 1 {
+		t.Errorf("rm deny: got %d patterns, want 1", len(rm.Deny))
 	}
 
 	// All patterns should be glob type
-	for _, p := range append(r.Allow, r.Deny...) {
-		if p.Type != config.PatternGlob {
-			t.Errorf("pattern type: got %q, want glob", p.Type)
+	for _, r := range result.Rules {
+		for _, p := range append(r.Allow, r.Deny...) {
+			if p.Type != config.PatternGlob {
+				t.Errorf("pattern type: got %q, want glob", p.Type)
+			}
 		}
 	}
 }
@@ -187,6 +204,61 @@ func TestConvert_Empty(t *testing.T) {
 	}
 	if len(result.Warnings) == 0 {
 		t.Error("expected warning for empty permissions")
+	}
+}
+
+func TestGroupPrefix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		pattern string
+		want    string
+	}{
+		{"git log *", "git"},
+		{"make test", "make"},
+		{"./permcop validate *", "permcop"}, // leading ./ stripped
+		{"go build", "go"},
+		{"*", "(other)"},
+		{"", "(other)"},
+		{"singleword", "singleword"},
+		{"tk:*", "tk"},        // bare wildcard with colon separator
+		{"permcop:*", "permcop"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.pattern, func(t *testing.T) {
+			t.Parallel()
+			got := groupPrefix(tc.pattern)
+			if got != tc.want {
+				t.Errorf("groupPrefix(%q) = %q, want %q", tc.pattern, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestConvert_OtherGroupLast(t *testing.T) {
+	t.Parallel()
+
+	// Bare "Bash" produces pattern "*" which goes in (other); it should be last
+	// even though it was encountered before the "git" entry.
+	perms := ClaudePermissions{
+		Allow: []string{"Bash", "Bash(git status)"},
+	}
+
+	result, err := Convert(perms)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(result.Rules))
+	}
+	if result.Rules[0].Name != "Imported: git" {
+		t.Errorf("rule[0]: got %q, want \"Imported: git\"", result.Rules[0].Name)
+	}
+	if result.Rules[1].Name != "Imported: (other)" {
+		t.Errorf("rule[1]: got %q, want \"Imported: (other)\"", result.Rules[1].Name)
 	}
 }
 

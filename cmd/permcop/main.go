@@ -446,8 +446,6 @@ func addHookToSettings(path string) error {
 
 // runImportClaudeSettings reads Claude Code's settings.json permissions and
 // prints equivalent permcop TOML [[rules]] blocks to stdout.
-// If --append is passed as the second argument, the output is appended to the
-// global permcop config file instead of being printed.
 func runImportClaudeSettings(settingsPath string) {
 	home, err := os.UserHomeDir()
 	if err != nil {

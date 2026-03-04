@@ -212,8 +212,21 @@ func parseEntry(entry string) (tool, pattern string, ok bool) {
 func toPattern(pattern string) config.Pattern {
 	return config.Pattern{
 		Type:    config.PatternGlob,
-		Pattern: pattern,
+		Pattern: translateClaudePattern(pattern),
 	}
+}
+
+// translateClaudePattern converts Claude Code's colon-separated argument syntax
+// to permcop's space-separated glob format.
+//
+//	"make test:*"       → "make test *"
+//	"git log:--oneline" → "git log --oneline"
+//	"npm run test"      → "npm run test"  (unchanged, no colon)
+func translateClaudePattern(pattern string) string {
+	if idx := strings.Index(pattern, ":"); idx >= 0 {
+		return pattern[:idx] + " " + pattern[idx+1:]
+	}
+	return pattern
 }
 
 // RulesToTOML renders a slice of rules as TOML [[rules]] blocks for insertion

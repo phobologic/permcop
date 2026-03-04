@@ -354,6 +354,58 @@ func TestFromFile_MissingFile(t *testing.T) {
 	}
 }
 
+func TestTranslateClaudePattern(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"make test:*", "make test *"},
+		{"git log:--oneline *", "git log --oneline *"},
+		{"npm run test", "npm run test"},
+		{"make:*", "make *"},
+		{"git diff:*", "git diff *"},
+		{"*", "*"},
+		{"", ""},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got := translateClaudePattern(tc.input)
+			if got != tc.want {
+				t.Errorf("translateClaudePattern(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestConvert_ColonPatternTranslation(t *testing.T) {
+	t.Parallel()
+
+	perms := ClaudePermissions{
+		Allow: []string{"Bash(make test:*)"},
+	}
+
+	result, err := Convert(perms)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(result.Rules))
+	}
+	if len(result.Rules[0].Allow) != 1 {
+		t.Fatalf("expected 1 allow pattern, got %d", len(result.Rules[0].Allow))
+	}
+	got := result.Rules[0].Allow[0].Pattern
+	if got != "make test *" {
+		t.Errorf("pattern: got %q, want %q", got, "make test *")
+	}
+}
+
 func TestRulesToTOML(t *testing.T) {
 	t.Parallel()
 

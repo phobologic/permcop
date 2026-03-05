@@ -1,4 +1,6 @@
 /permcop
+*.swp
+*.swo
 dist/
 coverage.out
 coverage.html

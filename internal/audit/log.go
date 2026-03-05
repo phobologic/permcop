@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mikecafarella/permcop/internal/parser"
@@ -102,7 +103,12 @@ func (l *Logger) Log(e Entry) error {
 		return err
 	}
 
+	// Acquire exclusive lock: serialises writes across concurrent processes.
+	if err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock log: %w", err)
+	}
 	_, err = fmt.Fprintln(l.file, line)
+	_ = syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
 	return err
 }
 

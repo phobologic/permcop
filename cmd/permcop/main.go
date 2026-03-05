@@ -289,7 +289,6 @@ func runCheck() {
 			Units:           result.Units,
 			RuleMatches:     result.RuleMatches,
 		})
-		writeHookDecision("ask", "")
 		os.Exit(0)
 	}
 

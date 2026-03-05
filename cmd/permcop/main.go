@@ -25,6 +25,25 @@ import (
 // version is set at build time via -ldflags "-X main.version=..."
 var version = "dev"
 
+type hookOutput struct {
+	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type hookSpecificOutput struct {
+	HookEventName            string `json:"hookEventName"`
+	PermissionDecision       string `json:"permissionDecision"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+}
+
+func writeHookDecision(decision, reason string) {
+	out := hookOutput{HookSpecificOutput: hookSpecificOutput{
+		HookEventName:            "PreToolUse",
+		PermissionDecision:       decision,
+		PermissionDecisionReason: reason,
+	}}
+	_ = json.NewEncoder(os.Stdout).Encode(out)
+}
+
 const usage = `permcop — Claude Code bash permission enforcer
 
 Usage:
@@ -270,6 +289,7 @@ func runCheck() {
 			Units:           result.Units,
 			RuleMatches:     result.RuleMatches,
 		})
+		writeHookDecision("ask", "")
 		os.Exit(0)
 	}
 
@@ -278,6 +298,7 @@ func runCheck() {
 
 func exitWithResult(result *rules.Result) {
 	if result.Allowed {
+		writeHookDecision("allow", "")
 		os.Exit(0)
 	}
 	reason := result.Reason
@@ -290,8 +311,8 @@ func exitWithResult(result *rules.Result) {
 			reason += fmt.Sprintf(" — matched unit: %q", result.DecidingUnit.Value)
 		}
 	}
-	fmt.Fprintln(os.Stdout, reason)
-	os.Exit(2)
+	writeHookDecision("deny", reason)
+	os.Exit(0)
 }
 
 // absolutePath resolves a path relative to cwd, then canonicalizes it by

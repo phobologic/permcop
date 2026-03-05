@@ -162,6 +162,15 @@ func TestEngine_PatternTypes(t *testing.T) {
 		{"glob star", config.Pattern{Type: config.PatternGlob, Pattern: "go test *"}, "go test ./...", true},
 		{"regex match", config.Pattern{Type: config.PatternRegex, Pattern: `^rm\s+-rf`}, "rm -rf /tmp/foo", true},
 		{"regex no match", config.Pattern{Type: config.PatternRegex, Pattern: `^rm\s+-rf`}, "ls -la", false},
+		// word_glob
+		{"wg: command + any args", config.Pattern{Type: config.PatternWordGlob, Pattern: "grep **"}, "grep -rn foo.txt", true},
+		{"wg: ** matches zero tokens", config.Pattern{Type: config.PatternWordGlob, Pattern: "grep **"}, "grep", true},
+		{"wg: exact token count", config.Pattern{Type: config.PatternWordGlob, Pattern: "grep"}, "grep", true},
+		{"wg: no extra tokens allowed", config.Pattern{Type: config.PatternWordGlob, Pattern: "grep"}, "grep -r", false},
+		{"wg: flag char class match", config.Pattern{Type: config.PatternWordGlob, Pattern: "grep -[rniElv]* **"}, "grep -rn foo.txt", true},
+		{"wg: flag char class no match", config.Pattern{Type: config.PatternWordGlob, Pattern: "grep -[rniElv]* **"}, "grep --include=*.go foo", false},
+		{"wg: star one token", config.Pattern{Type: config.PatternWordGlob, Pattern: "make *"}, "make build", true},
+		{"wg: star not multi-token", config.Pattern{Type: config.PatternWordGlob, Pattern: "make *"}, "make build test", false},
 	}
 
 	for _, tc := range tests {

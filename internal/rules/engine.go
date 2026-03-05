@@ -17,9 +17,10 @@ import (
 // compiledPattern holds a pre-compiled pattern for fast repeated matching.
 // Glob and regex patterns are compiled once at engine construction.
 type compiledPattern struct {
-	p  config.Pattern
-	re *regexp.Regexp // non-nil for PatternRegex
-	g  glob.Glob      // non-nil for PatternGlob
+	p        config.Pattern
+	re       *regexp.Regexp // non-nil for PatternRegex
+	g        glob.Glob      // non-nil for PatternGlob
+	wgTokens []glob.Glob    // for PatternWordGlob; nil entry marks a "**" wildcard token
 }
 
 func newCompiledPattern(p config.Pattern) (compiledPattern, error) {
@@ -30,6 +31,19 @@ func newCompiledPattern(p config.Pattern) (compiledPattern, error) {
 		cp.g, err = glob.Compile(p.Pattern)
 		if err != nil {
 			return compiledPattern{}, fmt.Errorf("invalid glob pattern %q: %w", p.Pattern, err)
+		}
+	case config.PatternWordGlob:
+		parts := strings.Fields(p.Pattern)
+		cp.wgTokens = make([]glob.Glob, len(parts))
+		for i, part := range parts {
+			if part == "**" {
+				cp.wgTokens[i] = nil // sentinel: matches zero or more tokens
+			} else {
+				cp.wgTokens[i], err = glob.Compile(part)
+				if err != nil {
+					return compiledPattern{}, fmt.Errorf("invalid word_glob token %q: %w", part, err)
+				}
+			}
 		}
 	case config.PatternRegex:
 		cp.re, err = regexp.Compile(p.Pattern)
@@ -51,6 +65,8 @@ func (cp compiledPattern) match(value string) bool {
 			return false
 		}
 		return cp.g.Match(value)
+	case config.PatternWordGlob:
+		return matchWordGlob(cp.wgTokens, strings.Fields(value))
 	case config.PatternRegex:
 		if cp.re == nil {
 			return false
@@ -58,6 +74,29 @@ func (cp compiledPattern) match(value string) bool {
 		return cp.re.MatchString(value)
 	}
 	return false
+}
+
+// matchWordGlob matches command tokens against word_glob pattern tokens.
+// A nil entry in patTokens represents a "**" wildcard (zero or more tokens).
+func matchWordGlob(patTokens []glob.Glob, cmdTokens []string) bool {
+	if len(patTokens) == 0 {
+		return len(cmdTokens) == 0
+	}
+	if patTokens[0] == nil { // "**": try consuming 0..N remaining command tokens
+		for i := 0; i <= len(cmdTokens); i++ {
+			if matchWordGlob(patTokens[1:], cmdTokens[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(cmdTokens) == 0 {
+		return false
+	}
+	if !patTokens[0].Match(cmdTokens[0]) {
+		return false
+	}
+	return matchWordGlob(patTokens[1:], cmdTokens[1:])
 }
 
 // compiledGlobPath holds a pre-compiled path glob with ~/ expanded.

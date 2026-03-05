@@ -83,11 +83,37 @@ allow_write = ["/tmp/build/**"]
 | `exact` | `git status` | Full string equality |
 | `prefix` | `git log` | Matches `git log` or `git log <anything>` |
 | `glob` | `go test *` | Shell glob (`*` = any segment, `**` = recursive) |
+| `word_glob` | `grep -[rniElv]* **` | Token-aware: `*` = one token, `**` = zero or more tokens |
 | `regex` | `^rm\s+-rf` | RE2 regular expression |
 
 Bare strings default to `glob`. Pattern types apply to command strings; file paths always use glob.
 
 An unknown `type` value (e.g. a typo like `"prefx"`) is rejected at config load time with a clear error — it will not silently create a non-matching rule.
+
+#### `word_glob` — token-aware matching
+
+`word_glob` splits both the pattern and the command on whitespace before matching.
+Each pattern token is matched against the corresponding command token using standard
+glob syntax:
+
+- `*` matches any single token (one flag, one filename, etc.)
+- `**` matches zero or more tokens — use at the end to accept any remaining arguments
+- Character classes and alternatives work per-token: `[-rniElv]*`, `{log,diff}`
+
+```toml
+# Allow grep with one combined-flag token (e.g. -rn, -i) then any arguments
+allow = [{ type = "word_glob", pattern = "grep -[rniElv]* **" }]
+
+# Allow git log or git diff with any args; nothing else
+allow = [{ type = "word_glob", pattern = "git {log,diff} **" }]
+
+# Allow make with exactly one target
+allow = [{ type = "word_glob", pattern = "make *" }]
+```
+
+Note: combined short flags like `-rn` are treated as a single token. The pattern
+`-[rniElv]*` accepts any string starting with `-` followed by characters from that
+set, covering combinations like `-rn` or `-rniEl`.
 
 File path patterns (`allow_read`, `deny_read`, `allow_write`, `deny_write`) support `~/` as a prefix, which is expanded to the user's home directory at engine startup:
 

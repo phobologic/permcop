@@ -6,10 +6,11 @@ import "fmt"
 type PatternType string
 
 const (
-	PatternExact  PatternType = "exact"
-	PatternPrefix PatternType = "prefix"
-	PatternGlob   PatternType = "glob"
-	PatternRegex  PatternType = "regex"
+	PatternExact    PatternType = "exact"
+	PatternPrefix   PatternType = "prefix"
+	PatternGlob     PatternType = "glob"
+	PatternWordGlob PatternType = "word_glob"
+	PatternRegex    PatternType = "regex"
 )
 
 // UnknownVariableAction defines behavior when shell variables are found in a command.
@@ -53,10 +54,10 @@ func (p *Pattern) UnmarshalTOML(data interface{}) error {
 		p.Type = PatternGlob
 	}
 	switch p.Type {
-	case PatternExact, PatternPrefix, PatternGlob, PatternRegex:
+	case PatternExact, PatternPrefix, PatternGlob, PatternWordGlob, PatternRegex:
 		// valid
 	default:
-		return fmt.Errorf("unknown pattern type %q: must be one of exact, prefix, glob, regex", p.Type)
+		return fmt.Errorf("unknown pattern type %q: must be one of exact, prefix, glob, word_glob, regex", p.Type)
 	}
 	return nil
 }

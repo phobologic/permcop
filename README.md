@@ -179,7 +179,13 @@ allow      = [{ type = "prefix", pattern = "echo" }]
 deny_write = ["/tmp/secrets/**"]
 ```
 
-The `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply to file units produced by shell redirections inside Bash commands (e.g. `echo hi > /tmp/out.txt` produces a write unit for `/tmp/out.txt`). They do not apply to direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls unless you explicitly add those matchers to the hook (see [Hook wiring](#hook-wiring)).
+The `allow_read`/`deny_read`/`allow_write`/`deny_write` patterns apply only to **shell redirections** — the `>`, `<`, `>>`, and related operators that appear in Bash commands. For example, `echo hi > /tmp/out.txt` produces a write unit for `/tmp/out.txt`, and `wc -l < data.txt` produces a read unit for `data.txt`.
+
+**They do not cover file paths that appear as command arguments.** `cat ~/.ssh/id_rsa` is parsed as a single command unit; there is no read unit for `~/.ssh/id_rsa`. The same applies to `grep`, `head`, `tail`, and any other command that opens files directly rather than through shell redirection. permcop sees the full command string and can deny it via a `deny` pattern — but `deny_read` has no reach here.
+
+For broad protection against argument-based file access (e.g. preventing Claude from reading `~/.ssh` or `~/.aws` regardless of which command is used), rely on **Claude Code's sandbox** rather than permcop's file patterns. permcop's file unit rules are a complement to that layer — useful for controlling what redirection targets are allowed for already-approved commands — not a substitute for it.
+
+They also do not apply to direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls unless you explicitly add those matchers to the hook (see [Hook wiring](#hook-wiring)).
 
 > **Design note — `allow_write` is a zone capability, not a per-command constraint**
 >
@@ -229,6 +235,10 @@ permcop is designed for **Bash**. That's where the real attack surface is: shell
 Claude Code already gates file operations through its own permission system (approval dialogs, `autoApprove` settings). Hooking file tools as well creates friction for Claude's internal operations — writing plan files, updating memory, editing config — with little added benefit. If something slips past Claude Code's file permission system, the blast radius is far smaller than an unchecked shell command anyway.
 
 If you do want to gate file tool calls, add the matchers manually to your Claude settings (see [Hook wiring](#hook-wiring)). Without explicit allow rules covering those paths, operations will fall through to Claude Code's own prompt.
+
+**What about `cat ~/.ssh/id_rsa` — isn't that a file read?**
+
+Yes, but it isn't a file *unit* — it's a command unit. permcop's `deny_read` only fires on shell redirections (`cmd < file`), not on file paths passed as arguments. Blocking `cat`, `grep`, `head`, or any other command from accessing sensitive paths requires either a `deny` pattern on the command string itself, or — more robustly — Claude Code's sandbox. The sandbox operates at the OS level and restricts what files Claude can open regardless of how it tries to open them.
 
 ## Commands
 

@@ -424,6 +424,91 @@ func validatePatterns(cfg *config.Config) error {
 	return err
 }
 
+// validateTOMLFragment parses a TOML rule fragment and checks that all patterns
+// compile. Used by openEditorLoop before accepting user edits.
+func validateTOMLFragment(tomlData string) error {
+	cfg, err := config.ParseFragment(tomlData)
+	if err != nil {
+		return err
+	}
+	return validatePatterns(cfg)
+}
+
+// buildSuggestHeader returns the comment block written at the top of a suggest
+// editor temp file. If validationErr is non-nil, it is included prominently.
+func buildSuggestHeader(cmd string, passUnits []string, validationErr error) string {
+	var h strings.Builder
+	if validationErr != nil {
+		h.WriteString("# ERROR — rule not saved. Fix the problem below and save, or clear the file to skip:\n")
+		h.WriteString(fmt.Sprintf("#   %v\n", validationErr))
+		h.WriteString("#\n")
+	}
+	h.WriteString(fmt.Sprintf("# Suggested rule for: %s\n", cmd))
+	if len(passUnits) > 0 && !(len(passUnits) == 1 && passUnits[0] == cmd) {
+		h.WriteString(fmt.Sprintf("# Unmatched units: %s\n", strings.Join(passUnits, ", ")))
+	}
+	h.WriteString("# Edit as needed, then save and quit.\n\n")
+	return h.String()
+}
+
+// openEditorLoop opens $EDITOR on a temp file containing tomlContent, validates
+// the result after each save, and loops until the content is valid or the user
+// clears the file. On each failed validation, the error is shown as a comment
+// at the top of the file when the editor is re-opened, with the user's edits
+// preserved. Returns the validated TOML and true, or ("", false) if the user
+// cleared the content to skip.
+func openEditorLoop(cmd string, passUnits []string, initialTOML string) (string, bool) {
+	tmp, err := os.CreateTemp("", "permcop-suggest-*.toml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create temp file: %v\n", err)
+		return "", false
+	}
+	tmpName := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpName)
+
+	editorBin := os.Getenv("EDITOR")
+	if editorBin == "" {
+		editorBin = "vi"
+	}
+
+	var validationErr error
+	currentTOML := initialTOML
+	for {
+		header := buildSuggestHeader(cmd, passUnits, validationErr)
+		if werr := os.WriteFile(tmpName, []byte(header+currentTOML), 0600); werr != nil {
+			fmt.Fprintf(os.Stderr, "write temp file: %v\n", werr)
+			return "", false
+		}
+
+		edCmd := exec.Command(editorBin, tmpName)
+		edCmd.Stdin = os.Stdin
+		edCmd.Stdout = os.Stdout
+		edCmd.Stderr = os.Stderr
+		if rerr := edCmd.Run(); rerr != nil {
+			fmt.Fprintf(os.Stderr, "editor exited with error: %v\n", rerr)
+		}
+
+		content, rerr := os.ReadFile(tmpName)
+		if rerr != nil {
+			fmt.Fprintf(os.Stderr, "read temp file: %v\n", rerr)
+			return "", false
+		}
+		edited := stripSuggestHeader(string(content))
+		if strings.TrimSpace(edited) == "" {
+			return "", false
+		}
+
+		if verr := validateTOMLFragment(edited); verr != nil {
+			validationErr = verr
+			currentTOML = edited // preserve user's edits across iterations
+			continue
+		}
+
+		return edited, true
+	}
+}
+
 // runValidate parses and validates config files, then checks that all rule
 // patterns compile correctly.
 //
@@ -1135,45 +1220,8 @@ func runSuggest(args []string) {
 			suggested := suggestRulesForUnits(passUnits, cmd)
 			tomlContent := importer.RulesToTOML(suggested)
 
-			tmp, err := os.CreateTemp("", "permcop-suggest-*.toml")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "create temp file: %v\n", err)
-				continue
-			}
-			tmpName := tmp.Name()
-			header := fmt.Sprintf("# Suggested rule for: %s\n", cmd)
-			if len(passUnits) > 0 && !(len(passUnits) == 1 && passUnits[0] == cmd) {
-				header += fmt.Sprintf("# Unmatched units: %s\n", strings.Join(passUnits, ", "))
-			}
-			header += "# Edit as needed, then save and quit.\n\n"
-			if _, err := fmt.Fprint(tmp, header+tomlContent); err != nil {
-				tmp.Close()
-				os.Remove(tmpName)
-				fmt.Fprintf(os.Stderr, "write temp file: %v\n", err)
-				continue
-			}
-			tmp.Close()
-
-			editorBin := os.Getenv("EDITOR")
-			if editorBin == "" {
-				editorBin = "vi"
-			}
-			edCmd := exec.Command(editorBin, tmpName)
-			edCmd.Stdin = os.Stdin
-			edCmd.Stdout = os.Stdout
-			edCmd.Stderr = os.Stderr
-			if err := edCmd.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "editor exited with error: %v\n", err)
-			}
-
-			content, err := os.ReadFile(tmpName)
-			os.Remove(tmpName)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "read temp file: %v\n", err)
-				continue
-			}
-			edited := stripSuggestHeader(string(content))
-			if strings.TrimSpace(edited) == "" {
+			edited, ok := openEditorLoop(cmd, passUnits, tomlContent)
+			if !ok {
 				fmt.Fprintln(os.Stderr, "Empty content; skipping.")
 				continue
 			}
@@ -1456,46 +1504,12 @@ func (t *tuiState) editItem(idx int, destPath string, state **term.State) {
 	suggested := suggestRulesForUnits(entry.passUnits, cmd)
 	tomlContent := importer.RulesToTOML(suggested)
 
-	tmp, err := os.CreateTemp("", "permcop-suggest-*.toml")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "create temp file: %v\n", err)
-	} else {
-		tmpName := tmp.Name()
-		header := fmt.Sprintf("# Suggested rule for: %s\n", cmd)
-		if len(entry.passUnits) > 0 && !(len(entry.passUnits) == 1 && entry.passUnits[0] == cmd) {
-			header += fmt.Sprintf("# Unmatched units: %s\n", strings.Join(entry.passUnits, ", "))
-		}
-		header += "# Edit as needed, then save and quit.\n\n"
-		if _, werr := fmt.Fprint(tmp, header+tomlContent); werr != nil {
-			fmt.Fprintf(os.Stderr, "write temp file: %v\n", werr)
-		}
-		tmp.Close()
-
-		editorBin := os.Getenv("EDITOR")
-		if editorBin == "" {
-			editorBin = "vi"
-		}
-		edCmd := exec.Command(editorBin, tmpName)
-		edCmd.Stdin = os.Stdin
-		edCmd.Stdout = os.Stdout
-		edCmd.Stderr = os.Stderr
-		if rerr := edCmd.Run(); rerr != nil {
-			fmt.Fprintf(os.Stderr, "editor exited with error: %v\n", rerr)
-		}
-
-		content, rerr := os.ReadFile(tmpName)
-		os.Remove(tmpName)
-		if rerr != nil {
-			fmt.Fprintf(os.Stderr, "read temp file: %v\n", rerr)
-		} else {
-			edited := stripSuggestHeader(string(content))
-			if strings.TrimSpace(edited) == "" {
-				fmt.Fprintln(os.Stderr, "Empty content; skipping.")
-			} else if confirmAppend(destPath, edited) {
-				t.status[idx] = tuiConfirmed
-				t.toml[idx] = edited
-			}
-		}
+	edited, ok := openEditorLoop(cmd, entry.passUnits, tomlContent)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "Empty content; skipping.")
+	} else if confirmAppend(destPath, edited) {
+		t.status[idx] = tuiConfirmed
+		t.toml[idx] = edited
 	}
 
 	// Re-enter raw mode and redraw.

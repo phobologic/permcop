@@ -103,6 +103,17 @@ func Load(cwd string) (*Config, error) {
 	return merged, nil
 }
 
+// ParseFragment parses a TOML config string and returns the decoded Config.
+// Unlike LoadFile, it does not apply defaults and is intended for validating
+// rule fragments (e.g. from the suggest editor) before appending to a config file.
+func ParseFragment(data string) (*Config, error) {
+	var cfg Config
+	if _, err := toml.Decode(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	return &cfg, nil
+}
+
 // LoadFile loads a config from an explicit path (used by validate command).
 // Relative paths are resolved against the current working directory.
 func LoadFile(path string) (*Config, error) {

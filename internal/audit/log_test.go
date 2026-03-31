@@ -59,7 +59,7 @@ func TestLoggerMultipleWrites(t *testing.T) {
 	}
 }
 
-func TestTimestampUsesLocalOffset(t *testing.T) {
+func TestTimestampIsRFC3339(t *testing.T) {
 	t.Parallel()
 
 	line := textLine(Entry{
@@ -68,16 +68,10 @@ func TestTimestampUsesLocalOffset(t *testing.T) {
 		OriginalCommand: "git status",
 	})
 
-	// The formatted timestamp must not end with bare "Z" — it should carry an offset.
-	// In UTC the offset is "+00:00", not "Z", when using .Local() on a UTC-zone time.
-	// We just check that the ISO-8601 offset separator appears and "Z" is absent as suffix.
 	parts := strings.SplitN(line, " ", 2)
 	ts := parts[0]
-	if strings.HasSuffix(ts, "Z") {
-		t.Errorf("timestamp %q ends with Z; want local offset (e.g. +00:00 or -05:00)", ts)
-	}
-	if !strings.ContainsAny(ts[len("2006-01-02T15:04:05"):], "+-") {
-		t.Errorf("timestamp %q missing UTC offset in local format", ts)
+	if _, err := time.Parse(time.RFC3339, ts); err != nil {
+		t.Errorf("timestamp %q is not valid RFC3339: %v", ts, err)
 	}
 }
 

@@ -63,7 +63,8 @@ Config files (merged in priority order, highest first):
   .permcop.toml                    project shared (committed; team policy)
   ~/.config/permcop/config.local.toml  global local
   ~/.config/permcop/config.toml        global shared
-  Audit log: ~/.local/share/permcop/audit.log
+  Audit log: ~/.local/share/permcop/projects/<name>/audit.log  (per-project, set by init)
+             ~/.local/share/permcop/audit.log                  (global default)
 `
 
 const usageImportClaudeSettings = `permcop import-claude-settings — Convert Claude Code permissions to permcop TOML

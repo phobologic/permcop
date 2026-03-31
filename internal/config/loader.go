@@ -104,7 +104,15 @@ func Load(cwd string) (*Config, error) {
 }
 
 // LoadFile loads a config from an explicit path (used by validate command).
+// Relative paths are resolved against the current working directory.
 func LoadFile(path string) (*Config, error) {
+	if !filepath.IsAbs(path) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("getwd: %w", err)
+		}
+		path = filepath.Join(cwd, path)
+	}
 	cfg, err := loadFile(path, false)
 	if err != nil {
 		return nil, err

@@ -417,25 +417,97 @@ func runExplain(command string) {
 	}
 }
 
-// runValidate parses the config file and reports any errors.
+// validatePatterns constructs a rules engine from cfg to catch invalid glob and
+// regex patterns. Returns an error describing the first bad pattern, or nil.
+func validatePatterns(cfg *config.Config) error {
+	_, err := rules.New(cfg, nil)
+	return err
+}
+
+// runValidate parses and validates config files, then checks that all rule
+// patterns compile correctly.
+//
+// With no argument: shows all four config layers active from the current
+// directory and validates each present file, then validates the merged config.
+//
+// With an explicit path: validates that single file.
 func runValidate(path string) {
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
-			os.Exit(1)
-		}
-		path = filepath.Join(home, ".config", "permcop", "config.toml")
+	if path != "" {
+		runValidateSingleFile(path)
+		return
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "permcop: cannot determine working directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	layers, err := config.FindLayers(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "permcop: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Config layers active from %s (highest priority first):\n\n", cwd)
+	anyPresent := false
+	failed := false
+	for _, layer := range layers {
+		if !layer.Exists {
+			fmt.Printf("  %-16s %s\n                   (not present)\n\n", layer.Label, layer.Path)
+			continue
+		}
+		anyPresent = true
+		cfg, loadErr := config.LoadFile(layer.Path)
+		if loadErr != nil {
+			fmt.Printf("  %-16s %s\n                   INVALID: %v\n\n", layer.Label, layer.Path, loadErr)
+			failed = true
+			continue
+		}
+		patErr := validatePatterns(cfg)
+		if patErr != nil {
+			fmt.Printf("  %-16s %s\n                   INVALID: %v\n\n", layer.Label, layer.Path, patErr)
+			failed = true
+			continue
+		}
+		fmt.Printf("  %-16s %s\n                   OK — %d rules, all patterns valid\n\n", layer.Label, layer.Path, len(cfg.Rules))
+	}
+
+	if !anyPresent {
+		fmt.Println("No config files found. Run `permcop init` to create one.")
+		os.Exit(0)
+	}
+	if failed {
+		os.Exit(1)
+	}
+
+	// Validate the merged config (catches interaction effects and confirms the
+	// full engine can be constructed).
+	merged, err := config.Load(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Merged config INVALID: %v\n", err)
+		os.Exit(1)
+	}
+	if err := validatePatterns(merged); err != nil {
+		fmt.Fprintf(os.Stderr, "Merged config INVALID: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Merged: %d rules total — all patterns valid\n", len(merged.Rules))
+}
+
+// runValidateSingleFile validates one explicit config file path.
+func runValidateSingleFile(path string) {
 	cfg, err := config.LoadFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "INVALID: %v\n", err)
 		os.Exit(1)
 	}
-
+	if err := validatePatterns(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "INVALID: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Printf("OK: %s\n", path)
-	fmt.Printf("  %d rules\n", len(cfg.Rules))
+	fmt.Printf("  %d rules, all patterns valid\n", len(cfg.Rules))
 	for i, r := range cfg.Rules {
 		fmt.Printf("  [%d] %q  allow=%d deny=%d allow_read=%d deny_read=%d allow_write=%d deny_write=%d\n",
 			i, r.Name,

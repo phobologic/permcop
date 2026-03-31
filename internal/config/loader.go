@@ -149,6 +149,61 @@ func loadFile(relOrAbsPath string, missingOK bool) (*Config, error) {
 	return &cfg, nil
 }
 
+// ConfigLayer describes one config file layer used by Load.
+type ConfigLayer struct {
+	Label  string // e.g. "project-local"
+	Path   string // absolute path
+	Exists bool
+}
+
+// FindLayers returns the four config layers that Load would use for the given
+// cwd, in priority order (highest first). Layers whose files do not exist are
+// included with Exists=false so callers can report the full picture.
+func FindLayers(cwd string) ([]ConfigLayer, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	// Walk upward to find the project directory, mirroring findAndLoadProject.
+	projectDir := cwd
+	dir := cwd
+	found := false
+	for {
+		sharedPath := filepath.Join(dir, projectFileName)
+		localPath := filepath.Join(dir, projectLocalFileName)
+		_, sharedErr := os.Stat(sharedPath)
+		_, localErr := os.Stat(localPath)
+		if sharedErr == nil || localErr == nil {
+			projectDir = dir
+			found = true
+			break
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			break
+		}
+		if dir == home || dir == filepath.Dir(dir) {
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+	if !found {
+		projectDir = cwd
+	}
+
+	layers := []ConfigLayer{
+		{Label: "project-local", Path: filepath.Join(projectDir, projectLocalFileName)},
+		{Label: "project-shared", Path: filepath.Join(projectDir, projectFileName)},
+		{Label: "global-local", Path: filepath.Join(home, globalLocalConfigPath)},
+		{Label: "global-shared", Path: filepath.Join(home, globalConfigPath)},
+	}
+	for i := range layers {
+		_, err := os.Stat(layers[i].Path)
+		layers[i].Exists = err == nil
+	}
+	return layers, nil
+}
+
 // findAndLoadProject walks from cwd upward (stopping at .git or home) looking
 // for .permcop.toml (shared) and .permcop.local.toml (local). Both files are
 // loaded from the first directory that contains either. Walking stops at the

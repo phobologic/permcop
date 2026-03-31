@@ -1,10 +1,10 @@
+version: "2"
+
 linters:
   enable:
     - errcheck
     - govet
     - staticcheck
-    - unused
-    - gosimple
     - ineffassign
     - goimports
     - misspell

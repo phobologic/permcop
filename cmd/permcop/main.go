@@ -201,22 +201,21 @@ func main() {
 }
 
 // runCheck is the main hook entry point. It reads JSON from stdin, evaluates the
-// tool call, writes a human-readable reason to stdout on deny, and exits 0 or 2.
+// tool call, and writes a structured JSON decision to stdout before exiting 0.
 // All failures — including unrecognized hook format — are fail-closed (deny) and logged.
 func runCheck() {
 	cwd, err := os.Getwd()
 	if err != nil {
 		// Fail-closed: cannot determine CWD means file path resolution is unsafe.
-		// Log to stdout (deny channel) before the audit logger is available.
-		fmt.Fprintf(os.Stdout, "permcop: cannot determine working directory: %v\n", err)
-		os.Exit(2)
+		writeHookDecision("deny", fmt.Sprintf("permcop: cannot determine working directory: %v", err))
+		os.Exit(0)
 	}
 
 	// Load config early so we can log everything, including hook parse failures.
 	cfg, cfgErr := config.Load(cwd)
 	if cfgErr != nil {
-		fmt.Fprintf(os.Stdout, "permcop: config unavailable: %v\n", cfgErr)
-		os.Exit(2)
+		writeHookDecision("deny", fmt.Sprintf("permcop: config unavailable: %v", cfgErr))
+		os.Exit(0)
 	}
 
 	logger := audit.New(cfg.Defaults.LogFile, cfg.Defaults.LogFormat, cfg.Defaults.LogMaxSizeMB, cfg.Defaults.LogMaxFiles)
@@ -229,8 +228,8 @@ func runCheck() {
 			Reason:          reason,
 			OriginalCommand: "(unknown — hook input error)",
 		})
-		fmt.Fprintln(os.Stdout, reason)
-		os.Exit(2)
+		writeHookDecision("deny", reason)
+		os.Exit(0)
 	}
 
 	in, err := hook.ReadInput(os.Stdin)

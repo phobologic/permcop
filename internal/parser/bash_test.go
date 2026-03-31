@@ -173,9 +173,6 @@ func TestParse(t *testing.T) {
 			t.Parallel()
 
 			cwd := "/tmp/testcwd"
-			if tc.name == "relative redirect resolved to cwd" {
-				// Special cwd for this test
-			}
 
 			result := Parse(tc.command, cwd, 3)
 

@@ -444,10 +444,14 @@ func captureStderr(t *testing.T, fn func()) string {
 	orig := os.Stderr
 	os.Stderr = w
 	fn()
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	os.Stderr = orig
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
 	return buf.String()
 }
 

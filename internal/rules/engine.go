@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gobwas/glob"
+
 	"github.com/mikecafarella/permcop/internal/audit"
 	"github.com/mikecafarella/permcop/internal/config"
 	"github.com/mikecafarella/permcop/internal/parser"

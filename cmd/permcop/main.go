@@ -144,9 +144,9 @@ func main() {
 	switch os.Args[1] {
 	case "help", "--help", "-h":
 		if len(os.Args) >= 3 && os.Args[2] == "import-claude-settings" {
-			fmt.Fprint(os.Stdout, usageImportClaudeSettings)
+			fmt.Print(usageImportClaudeSettings)
 		} else {
-			fmt.Fprint(os.Stdout, usage)
+			fmt.Print(usage)
 		}
 		os.Exit(0)
 	case "version", "--version", "-v":
@@ -183,7 +183,7 @@ func main() {
 			case "--shared":
 				shared = true
 			case "--help", "-h":
-				fmt.Fprint(os.Stdout, usageImportClaudeSettings)
+				fmt.Print(usageImportClaudeSettings)
 				os.Exit(0)
 			default:
 				if strings.HasPrefix(arg, "-") {
@@ -219,7 +219,6 @@ func runCheck() {
 	}
 
 	logger := audit.New(cfg.Defaults.LogFile, cfg.Defaults.LogFormat, cfg.Defaults.LogMaxSizeMB, cfg.Defaults.LogMaxFiles)
-	defer logger.Close()
 
 	denyAndExit := func(reason string) {
 		_ = logger.Log(audit.Entry{
@@ -345,7 +344,6 @@ func runExplain(command string) {
 
 	// Null logger for explain (no file writes)
 	logger := audit.New(os.DevNull, "text", 0, 0)
-	defer logger.Close()
 	engine, err := rules.New(cfg, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: invalid pattern: %v\n", err)
@@ -440,12 +438,12 @@ func buildSuggestHeader(cmd string, passUnits []string, validationErr error) str
 	var h strings.Builder
 	if validationErr != nil {
 		h.WriteString("# ERROR — rule not saved. Fix the problem below and save, or clear the file to skip:\n")
-		h.WriteString(fmt.Sprintf("#   %v\n", validationErr))
+		fmt.Fprintf(&h, "#   %v\n", validationErr)
 		h.WriteString("#\n")
 	}
-	h.WriteString(fmt.Sprintf("# Suggested rule for: %s\n", cmd))
-	if len(passUnits) > 0 && !(len(passUnits) == 1 && passUnits[0] == cmd) {
-		h.WriteString(fmt.Sprintf("# Unmatched units: %s\n", strings.Join(passUnits, ", ")))
+	fmt.Fprintf(&h, "# Suggested rule for: %s\n", cmd)
+	if len(passUnits) > 0 && (len(passUnits) != 1 || passUnits[0] != cmd) {
+		fmt.Fprintf(&h, "# Unmatched units: %s\n", strings.Join(passUnits, ", "))
 	}
 	h.WriteString("# Edit as needed, then save and quit.\n\n")
 	return h.String()
@@ -464,8 +462,8 @@ func openEditorLoop(cmd string, passUnits []string, initialTOML string) (string,
 		return "", false
 	}
 	tmpName := tmp.Name()
-	tmp.Close()
-	defer os.Remove(tmpName)
+	_ = tmp.Close()
+	defer func() { _ = os.Remove(tmpName) }()
 
 	editorBin := os.Getenv("EDITOR")
 	if editorBin == "" {
@@ -807,20 +805,20 @@ func addHookToSettings(path string) error {
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("close temp file: %w", err)
 	}
 	if err := os.Chmod(tmpName, origMode); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
@@ -847,9 +845,10 @@ func runImportClaudeSettings(global, dryRun, shared bool, sourcePath string) {
 	// Resolve source paths (both settings.json and settings.local.json are
 	// merged so that permissions split across the two files are all imported).
 	var sourcePaths []string
-	if sourcePath != "" {
+	switch {
+	case sourcePath != "":
 		sourcePaths = []string{sourcePath}
-	} else if global {
+	case global:
 		for _, name := range []string{"settings.json", "settings.local.json"} {
 			p := filepath.Join(home, ".claude", name)
 			if _, err := os.Stat(p); err == nil {
@@ -860,7 +859,7 @@ func runImportClaudeSettings(global, dryRun, shared bool, sourcePath string) {
 			fmt.Fprintln(os.Stderr, "error: neither ~/.claude/settings.json nor ~/.claude/settings.local.json found")
 			os.Exit(1)
 		}
-	} else {
+	default:
 		sourcePaths = findProjectClaudeSettings(cwd)
 		if len(sourcePaths) == 0 {
 			fmt.Fprintln(os.Stderr, "error: .claude/settings.json not found (searched from CWD to git root); use --global or provide a path")
@@ -933,10 +932,13 @@ func runImportClaudeSettings(global, dryRun, shared bool, sourcePath string) {
 		fmt.Fprintf(os.Stderr, "open %s: %v\n", destPath, err)
 		os.Exit(1)
 	}
-	defer f.Close()
-
 	if _, err := fmt.Fprint(f, "\n"+content); err != nil {
+		_ = f.Close()
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", destPath, err)
+		os.Exit(1)
+	}
+	if err := f.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "close %s: %v\n", destPath, err)
 		os.Exit(1)
 	}
 
@@ -983,7 +985,7 @@ func findProjectClaudeSettings(cwd string) []string {
 func promptChoice(prompt string, n int) int {
 	fmt.Print(prompt)
 	var resp string
-	fmt.Scanln(&resp)
+	_, _ = fmt.Scanln(&resp)
 	resp = strings.TrimSpace(resp)
 	if resp == "" {
 		return 1
@@ -1011,7 +1013,7 @@ func offerGitignore(cwd, filename string) {
 	}
 	fmt.Printf("Add %s to .gitignore? [Y/n] ", filename)
 	var resp string
-	fmt.Scanln(&resp)
+	_, _ = fmt.Scanln(&resp)
 	if strings.ToLower(strings.TrimSpace(resp)) == "n" {
 		return
 	}
@@ -1020,7 +1022,7 @@ func offerGitignore(cwd, filename string) {
 		fmt.Fprintf(os.Stderr, "warning: could not update .gitignore: %v\n", err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	entry := filename + "\n"
 	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
 		entry = "\n" + entry
@@ -1047,7 +1049,7 @@ func confirmAppend(destPath, content string) bool {
 	}
 	fmt.Printf("\nAppend? [y/N] ")
 	var resp string
-	fmt.Scanln(&resp)
+	_, _ = fmt.Scanln(&resp)
 	return strings.ToLower(strings.TrimSpace(resp)) == "y"
 }
 
@@ -1069,7 +1071,7 @@ func runSuggest(args []string) {
 		case arg == "--dry-run":
 			dryRun = true
 		case arg == "--help" || arg == "-h":
-			fmt.Fprint(os.Stdout, usageSuggest)
+			fmt.Print(usageSuggest)
 			os.Exit(0)
 		case arg == "--n":
 			if i+1 >= len(args) {
@@ -1245,12 +1247,16 @@ func runSuggest(args []string) {
 		fmt.Fprintf(os.Stderr, "open %s: %v\n", destPath, err)
 		os.Exit(1)
 	}
-	defer f.Close()
 	for _, content := range confirmedTOML {
 		if _, err := fmt.Fprint(f, "\n"+content); err != nil {
+			_ = f.Close()
 			fmt.Fprintf(os.Stderr, "write %s: %v\n", destPath, err)
 			os.Exit(1)
 		}
+	}
+	if err := f.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "close %s: %v\n", destPath, err)
+		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Wrote %d rule(s) to %s\n", len(confirmedTOML), destPath)
 
@@ -1301,7 +1307,7 @@ func passUnitsFrom(e audit.Entry) []string {
 // the pass units differ from the full command (i.e., the command is a chain and
 // only some sub-commands are unmatched).
 func labelForEntry(cmd string, passUnits []string) string {
-	if len(passUnits) > 0 && !(len(passUnits) == 1 && passUnits[0] == cmd) {
+	if len(passUnits) > 0 && (len(passUnits) != 1 || passUnits[0] != cmd) {
 		return fmt.Sprintf("%s  [→ %s]", cmd, strings.Join(passUnits, ", "))
 	}
 	return cmd
@@ -1437,7 +1443,7 @@ func (t *tuiState) renderDetail() {
 	fmt.Printf("\033[K  %d×  ·  last seen %s\r\n", entry.count, timeAgo(entry.lastSeen))
 
 	// Line 3: pass units, only when they differ from the command itself.
-	if len(entry.passUnits) > 0 && !(len(entry.passUnits) == 1 && entry.passUnits[0] == cmd) {
+	if len(entry.passUnits) > 0 && (len(entry.passUnits) != 1 || entry.passUnits[0] != cmd) {
 		unitsStr := strings.Join(entry.passUnits, ", ")
 		maxU := t.termW - 7
 		if maxU < 10 {

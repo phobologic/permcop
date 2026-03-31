@@ -18,7 +18,7 @@ func TestLoggerMultipleWrites(t *testing.T) {
 	path := filepath.Join(dir, "audit.log")
 
 	logger := New(path, "text", 0, 0)
-	defer logger.Close()
+	t.Cleanup(func() { _ = logger.Close() })
 
 	ts := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -141,7 +141,7 @@ func TestLoggerRotation(t *testing.T) {
 	// Use maxSizeMB=1, maxFiles=2 and pre-fill the file to just under 1 MB so
 	// a single additional write pushes it over.
 	logger := New(path, "text", 1, 2)
-	defer logger.Close()
+	t.Cleanup(func() { _ = logger.Close() })
 
 	// Pre-fill with ~1 MB of data by writing directly to the file.
 	fill := strings.Repeat("x", 1024*1024)
@@ -193,7 +193,7 @@ func TestLoggerRotationPrunesOldest(t *testing.T) {
 	}
 
 	logger := New(path, "text", 1, 2)
-	defer logger.Close()
+	t.Cleanup(func() { _ = logger.Close() })
 
 	fill := strings.Repeat("x", 1024*1024)
 	if err := os.WriteFile(path, []byte(fill), 0600); err != nil {

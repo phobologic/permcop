@@ -55,9 +55,7 @@ func (e *ParseError) Error() string {
 	raw := e.RawInput
 	const maxSnippet = 200
 	if len(raw) > maxSnippet {
-		snippet := make([]byte, maxSnippet, maxSnippet+len("...(truncated)"))
-		copy(snippet, raw)
-		raw = append(snippet, "...(truncated)"...)
+		raw = append(raw[:maxSnippet:maxSnippet], "...(truncated)"...)
 	}
 	return fmt.Sprintf("unrecognized hook input format: %v\nreceived: %s", e.Cause, raw)
 }

@@ -117,7 +117,7 @@ func (l *Logger) Log(e Entry) error {
 // Errors are ignored (fail-open): a rotation failure must not block audit writes.
 func (l *Logger) rotate() {
 	if l.file != nil {
-		l.file.Close()
+		_ = l.file.Close()
 		l.file = nil
 	}
 
@@ -162,48 +162,49 @@ func textLine(e Entry) string {
 
 	// Header line
 	var header strings.Builder
-	header.WriteString(fmt.Sprintf("%s %s", ts, e.Decision))
+	fmt.Fprintf(&header, "%s %s", ts, e.Decision)
 	if e.DecidingRule != "" {
-		header.WriteString(fmt.Sprintf("  rule=%q", e.DecidingRule))
+		fmt.Fprintf(&header, "  rule=%q", e.DecidingRule)
 	}
 	if e.DecidingPattern != "" {
-		header.WriteString(fmt.Sprintf(" pattern=%q", e.DecidingPattern))
+		fmt.Fprintf(&header, " pattern=%q", e.DecidingPattern)
 	}
 	if e.Reason != "" && e.DecidingRule == "" {
 		// Only print reason standalone when no rule matched (safety checks, no-match)
-		header.WriteString(fmt.Sprintf("  reason=%q", e.Reason))
+		fmt.Fprintf(&header, "  reason=%q", e.Reason)
 	}
 
 	var sb strings.Builder
 	sb.WriteString(header.String())
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("  original: %s\n", e.OriginalCommand))
+	fmt.Fprintf(&sb, "  original: %s\n", e.OriginalCommand)
 
 	if len(e.Units) > 0 {
 		unitStrs := make([]string, len(e.Units))
 		for i, u := range e.Units {
 			unitStrs[i] = fmt.Sprintf("[%s]", u.Value)
 		}
-		sb.WriteString(fmt.Sprintf("  units:    %s\n", strings.Join(unitStrs, " ")))
+		fmt.Fprintf(&sb, "  units:    %s\n", strings.Join(unitStrs, " "))
 	}
 
 	if e.DecidingUnit != nil {
-		sb.WriteString(fmt.Sprintf("  hit:      %s\n", e.DecidingUnit.Value))
+		fmt.Fprintf(&sb, "  hit:      %s\n", e.DecidingUnit.Value)
 	}
 
 	if len(e.RuleMatches) > 0 {
 		sb.WriteString("  matches:\n")
 		for _, m := range e.RuleMatches {
-			if m.Action == "allow" {
-				sb.WriteString(fmt.Sprintf("    allow  [%s]  rule=%q  pattern=%q\n", m.Unit, m.Rule, m.Pattern))
-			} else if m.Rule == "" {
+			switch {
+			case m.Action == "allow":
+				fmt.Fprintf(&sb, "    allow  [%s]  rule=%q  pattern=%q\n", m.Unit, m.Rule, m.Pattern)
+			case m.Rule == "":
 				if e.Decision == DecisionPassThrough {
-					sb.WriteString(fmt.Sprintf("    pass   [%s]  (no rule — deferred to Claude Code)\n", m.Unit))
+					fmt.Fprintf(&sb, "    pass   [%s]  (no rule — deferred to Claude Code)\n", m.Unit)
 				} else {
-					sb.WriteString(fmt.Sprintf("    deny   [%s]  (default deny)\n", m.Unit))
+					fmt.Fprintf(&sb, "    deny   [%s]  (default deny)\n", m.Unit)
 				}
-			} else {
-				sb.WriteString(fmt.Sprintf("    deny   [%s]  rule=%q  pattern=%q\n", m.Unit, m.Rule, m.Pattern))
+			default:
+				fmt.Fprintf(&sb, "    deny   [%s]  rule=%q  pattern=%q\n", m.Unit, m.Rule, m.Pattern)
 			}
 		}
 	}

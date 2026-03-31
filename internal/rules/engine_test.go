@@ -9,8 +9,6 @@ import (
 	"github.com/mikecafarella/permcop/internal/config"
 )
 
-func boolPtr(b bool) *bool { return &b }
-
 func newTestEngineWithEnv(t *testing.T, rules []config.Rule, defaults *config.Defaults, env map[string]string) *Engine {
 	t.Helper()
 	cfg := &config.Config{Rules: rules}

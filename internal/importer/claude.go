@@ -246,15 +246,15 @@ func RulesToTOML(rules []config.Rule) string {
 	var sb strings.Builder
 	for _, r := range rules {
 		sb.WriteString("[[rules]]\n")
-		sb.WriteString(fmt.Sprintf("name = %q\n", r.Name))
+		fmt.Fprintf(&sb, "name = %q\n", r.Name)
 		if r.Description != "" {
-			sb.WriteString(fmt.Sprintf("description = %q\n", r.Description))
+			fmt.Fprintf(&sb, "description = %q\n", r.Description)
 		}
 
 		if len(r.Allow) > 0 {
 			sb.WriteString("allow = [\n")
 			for _, p := range r.Allow {
-				sb.WriteString(fmt.Sprintf("  { type = %q, pattern = %q },\n", p.Type, p.Pattern))
+				fmt.Fprintf(&sb, "  { type = %q, pattern = %q },\n", p.Type, p.Pattern)
 			}
 			sb.WriteString("]\n")
 		}
@@ -262,7 +262,7 @@ func RulesToTOML(rules []config.Rule) string {
 		if len(r.Deny) > 0 {
 			sb.WriteString("deny = [\n")
 			for _, p := range r.Deny {
-				sb.WriteString(fmt.Sprintf("  { type = %q, pattern = %q },\n", p.Type, p.Pattern))
+				fmt.Fprintf(&sb, "  { type = %q, pattern = %q },\n", p.Type, p.Pattern)
 			}
 			sb.WriteString("]\n")
 		}
@@ -270,7 +270,7 @@ func RulesToTOML(rules []config.Rule) string {
 		if len(r.AllowRead) > 0 {
 			sb.WriteString("allow_read = [\n")
 			for _, p := range r.AllowRead {
-				sb.WriteString(fmt.Sprintf("  %q,\n", p))
+				fmt.Fprintf(&sb, "  %q,\n", p)
 			}
 			sb.WriteString("]\n")
 		}
@@ -278,7 +278,7 @@ func RulesToTOML(rules []config.Rule) string {
 		if len(r.DenyRead) > 0 {
 			sb.WriteString("deny_read = [\n")
 			for _, p := range r.DenyRead {
-				sb.WriteString(fmt.Sprintf("  %q,\n", p))
+				fmt.Fprintf(&sb, "  %q,\n", p)
 			}
 			sb.WriteString("]\n")
 		}
@@ -286,7 +286,7 @@ func RulesToTOML(rules []config.Rule) string {
 		if len(r.AllowWrite) > 0 {
 			sb.WriteString("allow_write = [\n")
 			for _, p := range r.AllowWrite {
-				sb.WriteString(fmt.Sprintf("  %q,\n", p))
+				fmt.Fprintf(&sb, "  %q,\n", p)
 			}
 			sb.WriteString("]\n")
 		}
@@ -294,7 +294,7 @@ func RulesToTOML(rules []config.Rule) string {
 		if len(r.DenyWrite) > 0 {
 			sb.WriteString("deny_write = [\n")
 			for _, p := range r.DenyWrite {
-				sb.WriteString(fmt.Sprintf("  %q,\n", p))
+				fmt.Fprintf(&sb, "  %q,\n", p)
 			}
 			sb.WriteString("]\n")
 		}

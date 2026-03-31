@@ -6,13 +6,17 @@ linters:
     - govet
     - staticcheck
     - ineffassign
-    - goimports
     - misspell
     - unconvert
     - gocritic
+
+formatters:
+  enable:
+    - goimports
   settings:
     goimports:
-      local-prefixes: github.com/mikecafarella/permcop
+      local-prefixes:
+        - github.com/mikecafarella/permcop
 
 issues:
   max-issues-per-linter: 0

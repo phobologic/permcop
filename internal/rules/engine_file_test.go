@@ -165,7 +165,7 @@ func TestCheckFile_AuditLog(t *testing.T) {
 		SubshellDepthLimit:    3,
 	})
 
-	e.CheckFile("/tmp/test.txt", parser.UnitReadFile)
+	_, _ = e.CheckFile("/tmp/test.txt", parser.UnitReadFile)
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {

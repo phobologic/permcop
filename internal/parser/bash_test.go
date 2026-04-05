@@ -165,6 +165,33 @@ func TestParse(t *testing.T) {
 			command: "echo $((",
 			wantErr: true,
 		},
+		{
+			name:    "bare variable assignment with command substitution",
+			command: "FOO=$(whoami)",
+			// The outer assignment emits no command unit (no args), but the
+			// command substitution value is extracted and checked independently.
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "whoami"},
+			},
+		},
+		{
+			name:    "variable assignment followed by command",
+			command: `T7=$(tk create "foo" -t task) ; echo $T7`,
+			// The tk create inside $(...) must be extracted as a unit; echo $T7 is
+			// the second statement.
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "tk create foo -t task"},
+				{Kind: UnitCommand, Value: "echo $T7", HasVariable: true},
+			},
+		},
+		{
+			name:    "assignment with literal value and command",
+			command: "FOO=bar echo hi",
+			// No subshell in the assignment value, so only the command unit is emitted.
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "echo hi"},
+			},
+		},
 	}
 
 	for _, tc := range tests {

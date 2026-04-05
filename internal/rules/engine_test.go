@@ -715,3 +715,53 @@ func TestEngine_ExpandVariables_FallbackToOtherRule(t *testing.T) {
 		t.Errorf("expected deciding rule 'permissive mv', got %q", r.DecidingRule)
 	}
 }
+
+// TestEngine_AssignmentCommandSubstitution verifies that commands embedded in
+// variable assignment values (e.g., T7=$(tk create ...)) are extracted and
+// evaluated against rules. Previously they were silently dropped, bypassing
+// all rule evaluation.
+func TestEngine_AssignmentCommandSubstitution(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:  "tk commands",
+			Allow: []config.Pattern{{Type: config.PatternPrefix, Pattern: "tk create"}},
+		},
+		{
+			Name:           "echo",
+			Allow:          []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+			VariableAction: config.VariableActionAllow,
+		},
+	}, nil, map[string]string{})
+
+	// The tk create inside $(...) must be covered by the "tk commands" rule.
+	r, err := e.Check(`T7=$(tk create "foo" -t task -p 2) ; echo $T7`, "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Allowed {
+		t.Errorf("expected ALLOW, got DENY: %s", r.Reason)
+	}
+}
+
+func TestEngine_AssignmentCommandSubstitution_Deny(t *testing.T) {
+	t.Parallel()
+
+	// No rule covers tk create — it should be denied even though it's inside an assignment.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:           "echo only",
+			Allow:          []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+			VariableAction: config.VariableActionAllow,
+		},
+	}, nil, map[string]string{})
+
+	r, err := e.Check(`T7=$(tk create "foo") ; echo $T7`, "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Allowed {
+		t.Errorf("expected DENY (tk create has no rule), got ALLOW: %s", r.Reason)
+	}
+}

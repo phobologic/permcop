@@ -76,33 +76,40 @@ func (v *visitor) walk(node syntax.Node) bool {
 }
 
 func (v *visitor) handleCallExpr(n *syntax.CallExpr) {
-	if len(n.Args) == 0 {
-		return
+	if len(n.Args) > 0 {
+		var parts []string
+		var combined wordFlags
+
+		for _, word := range n.Args {
+			part, flags := wordToString(word, v.cwd, v.maxDepth-1)
+			combined.hasVariable = combined.hasVariable || flags.hasVariable
+			combined.variables = append(combined.variables, flags.variables...)
+			combined.hasSubshell = combined.hasSubshell || flags.hasSubshell
+			parts = append(parts, part)
+		}
+
+		unit := CheckableUnit{
+			Kind:        UnitCommand,
+			Value:       strings.Join(parts, " "),
+			HasVariable: combined.hasVariable,
+			Variables:   combined.variables,
+			HasSubshell: combined.hasSubshell,
+		}
+		v.units = append(v.units, unit)
+
+		// Walk into any subshells in the arguments that we haven't flattened
+		for _, word := range n.Args {
+			v.walkSubshellsInWord(word, 1)
+		}
 	}
 
-	var parts []string
-	var combined wordFlags
-
-	for _, word := range n.Args {
-		part, flags := wordToString(word, v.cwd, v.maxDepth-1)
-		combined.hasVariable = combined.hasVariable || flags.hasVariable
-		combined.variables = append(combined.variables, flags.variables...)
-		combined.hasSubshell = combined.hasSubshell || flags.hasSubshell
-		parts = append(parts, part)
-	}
-
-	unit := CheckableUnit{
-		Kind:        UnitCommand,
-		Value:       strings.Join(parts, " "),
-		HasVariable: combined.hasVariable,
-		Variables:   combined.variables,
-		HasSubshell: combined.hasSubshell,
-	}
-	v.units = append(v.units, unit)
-
-	// Walk into any subshells in the arguments that we haven't flattened
-	for _, word := range n.Args {
-		v.walkSubshellsInWord(word, 1)
+	// Walk into subshells in assignment values (e.g., T7=$(cmd) or bare T7=$(cmd)).
+	// These must be checked independently — the command inside $(...) is not visible
+	// from the outer unit value and would otherwise bypass rule evaluation entirely.
+	for _, assign := range n.Assigns {
+		if assign.Value != nil {
+			v.walkSubshellsInWord(assign.Value, 1)
+		}
 	}
 }
 

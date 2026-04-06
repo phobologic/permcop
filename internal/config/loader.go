@@ -190,7 +190,7 @@ func FindLayers(cwd string) ([]ConfigLayer, error) {
 			found = true
 			break
 		}
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && fi.IsDir() {
 			break
 		}
 		if dir == home || dir == filepath.Dir(dir) {
@@ -249,7 +249,7 @@ func findAndLoadProject(cwd string) (shared, local *Config, err error) {
 			return shared, local, nil
 		}
 
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && fi.IsDir() {
 			break
 		}
 		if dir == home || dir == filepath.Dir(dir) {

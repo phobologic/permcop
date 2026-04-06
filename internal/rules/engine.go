@@ -355,6 +355,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 	for i := range parsed.Units {
 		orig := &parsed.Units[i]
 		covered := false
+		var skippedRules []audit.SkippedRule
 
 		for j := range e.compiledRules {
 			cr := e.compiledRules[j]
@@ -366,6 +367,23 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				expanded, ok := expandVars(u.Value, e.env)
 				if !ok {
 					// Variable not in env — this rule cannot cover the unit.
+					// Record which variables are missing so the audit log can
+					// surface a near-miss hint instead of a silent skip.
+					seen := make(map[string]bool)
+					var missing []string
+					for _, v := range orig.Variables {
+						if seen[v] {
+							continue
+						}
+						seen[v] = true
+						if _, exists := e.env[v]; !exists {
+							missing = append(missing, "$"+v)
+						}
+					}
+					skippedRules = append(skippedRules, audit.SkippedRule{
+						Rule:   cr.rule.Name,
+						Reason: "expand_variables: " + strings.Join(missing, ", ") + " not in env",
+					})
 					continue
 				}
 				u.Value = expanded
@@ -403,9 +421,10 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 
 		if !covered {
 			allowMatches = append(allowMatches, audit.RuleMatch{
-				Rule:   "",
-				Unit:   orig.Value,
-				Action: "deny",
+				Rule:         "",
+				Unit:         orig.Value,
+				Action:       "deny",
+				SkippedRules: skippedRules,
 			})
 			entry.RuleMatches = allowMatches
 			return &Result{Entry: entry, FallThrough: true}, nil

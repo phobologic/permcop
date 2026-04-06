@@ -23,12 +23,21 @@ const (
 	DecisionPassThrough Decision = "PASS" // no rule matched; deferred to Claude Code
 )
 
+// SkippedRule records a rule that was considered for a unit but could not cover
+// it, along with the reason it was skipped. Used for diagnostic output on
+// pass-through decisions.
+type SkippedRule struct {
+	Rule   string // rule name
+	Reason string // why the rule was skipped (e.g. "expand_variables: $VAR not in env")
+}
+
 // RuleMatch records how one unit was evaluated.
 type RuleMatch struct {
-	Rule    string // rule name; empty string = "default-deny"
-	Pattern string // matched pattern; empty for default-deny
-	Unit    string // the unit value (expanded if applicable)
-	Action  string // "allow" or "deny"
+	Rule         string        // rule name; empty string = "default-deny"
+	Pattern      string        // matched pattern; empty for default-deny
+	Unit         string        // the unit value (expanded if applicable)
+	Action       string        // "allow" or "deny"
+	SkippedRules []SkippedRule // rules skipped during coverage check; non-nil only for pass-through units
 }
 
 // Entry captures everything about a single permission decision.
@@ -200,6 +209,9 @@ func textLine(e Entry) string {
 			case m.Rule == "":
 				if e.Decision == DecisionPassThrough {
 					fmt.Fprintf(&sb, "    pass   [%s]  (no rule — deferred to Claude Code)\n", m.Unit)
+					for _, sk := range m.SkippedRules {
+						fmt.Fprintf(&sb, "      skipped: rule=%q — %s\n", sk.Rule, sk.Reason)
+					}
 				} else {
 					fmt.Fprintf(&sb, "    deny   [%s]  (default deny)\n", m.Unit)
 				}
@@ -239,14 +251,25 @@ func jsonLine(e Entry) (string, error) {
 	obj["units"] = unitVals
 
 	if len(e.RuleMatches) > 0 {
-		matches := make([]map[string]string, len(e.RuleMatches))
+		matches := make([]map[string]interface{}, len(e.RuleMatches))
 		for i, m := range e.RuleMatches {
-			matches[i] = map[string]string{
+			match := map[string]interface{}{
 				"rule":    m.Rule,
 				"pattern": m.Pattern,
 				"unit":    m.Unit,
 				"action":  m.Action,
 			}
+			if len(m.SkippedRules) > 0 {
+				skipped := make([]map[string]string, len(m.SkippedRules))
+				for j, sk := range m.SkippedRules {
+					skipped[j] = map[string]string{
+						"rule":   sk.Rule,
+						"reason": sk.Reason,
+					}
+				}
+				match["skipped_rules"] = skipped
+			}
+			matches[i] = match
 		}
 		obj["rule_matches"] = matches
 	}

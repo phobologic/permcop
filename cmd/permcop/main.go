@@ -398,6 +398,11 @@ func runExplain(command string) {
 		}
 	case result.FallThrough:
 		fmt.Printf("Result:   PASS (no matching rule — deferred to Claude Code)\n")
+		for _, m := range result.RuleMatches {
+			for _, sk := range m.SkippedRules {
+				fmt.Printf("          skipped: rule=%q — %s\n", sk.Rule, sk.Reason)
+			}
+		}
 	default:
 		fmt.Printf("Result:   DENY\n")
 		if result.Reason != "" {

@@ -3,6 +3,7 @@ package rules
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mikecafarella/permcop/internal/audit"
@@ -600,6 +601,58 @@ func TestEngine_ExpandVariables_MissingVar_FailClosed(t *testing.T) {
 	}
 	if r.Allowed {
 		t.Errorf("expected DENY (missing var fail-closed), got ALLOW")
+	}
+}
+
+func TestEngine_ExpandVariables_MissingVar_SkippedRulesPopulated(t *testing.T) {
+	t.Parallel()
+
+	// When expand_variables=true and $FINDING is not in env, the rule is skipped.
+	// The pass-through RuleMatch should carry a SkippedRule entry identifying
+	// the rule and the missing variable, so the audit log can surface a near-miss hint.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:            "echo commands",
+			ExpandVariables: true,
+			Allow:           []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+		},
+	}, nil, map[string]string{} /* empty env — $FINDING not present */)
+
+	r, err := e.Check("echo $FINDING", "/cwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Allowed {
+		t.Fatal("expected PASS/deny, got ALLOW")
+	}
+	if !r.FallThrough {
+		t.Fatal("expected FallThrough=true (pass-through), got deny")
+	}
+
+	// Find the pass-through RuleMatch for the uncovered unit.
+	var passMatch *audit.RuleMatch
+	for i := range r.RuleMatches {
+		m := &r.RuleMatches[i]
+		if m.Action == "deny" && m.Rule == "" {
+			passMatch = m
+			break
+		}
+	}
+	if passMatch == nil {
+		t.Fatal("no pass-through RuleMatch found")
+	}
+	if len(passMatch.SkippedRules) == 0 {
+		t.Fatal("expected SkippedRules to be populated, got none")
+	}
+	sk := passMatch.SkippedRules[0]
+	if sk.Rule != "echo commands" {
+		t.Errorf("expected skipped rule %q, got %q", "echo commands", sk.Rule)
+	}
+	if !strings.Contains(sk.Reason, "$FINDING") {
+		t.Errorf("expected reason to mention $FINDING, got %q", sk.Reason)
+	}
+	if !strings.Contains(sk.Reason, "not in env") {
+		t.Errorf("expected reason to mention 'not in env', got %q", sk.Reason)
 	}
 }
 

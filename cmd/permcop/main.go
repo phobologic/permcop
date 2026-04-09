@@ -14,12 +14,12 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/mikecafarella/permcop/internal/audit"
-	"github.com/mikecafarella/permcop/internal/config"
-	"github.com/mikecafarella/permcop/internal/hook"
-	"github.com/mikecafarella/permcop/internal/importer"
-	"github.com/mikecafarella/permcop/internal/parser"
-	"github.com/mikecafarella/permcop/internal/rules"
+	"github.com/phobologic/permcop/internal/audit"
+	"github.com/phobologic/permcop/internal/config"
+	"github.com/phobologic/permcop/internal/hook"
+	"github.com/phobologic/permcop/internal/importer"
+	"github.com/phobologic/permcop/internal/parser"
+	"github.com/phobologic/permcop/internal/rules"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."

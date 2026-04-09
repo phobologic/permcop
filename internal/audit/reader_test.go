@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikecafarella/permcop/internal/parser"
+	"github.com/phobologic/permcop/internal/parser"
 )
 
 // writeEntries logs entries to a new logger at path, then closes it.

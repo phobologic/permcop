@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikecafarella/permcop/internal/config"
+	"github.com/phobologic/permcop/internal/config"
 )
 
 func TestParseEntry(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikecafarella/permcop/internal/audit"
-	"github.com/mikecafarella/permcop/internal/config"
+	"github.com/phobologic/permcop/internal/audit"
+	"github.com/phobologic/permcop/internal/config"
 )
 
 func newTestEngineWithEnv(t *testing.T, rules []config.Rule, defaults *config.Defaults, env map[string]string) *Engine {

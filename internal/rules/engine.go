@@ -11,9 +11,9 @@ import (
 
 	"github.com/gobwas/glob"
 
-	"github.com/mikecafarella/permcop/internal/audit"
-	"github.com/mikecafarella/permcop/internal/config"
-	"github.com/mikecafarella/permcop/internal/parser"
+	"github.com/phobologic/permcop/internal/audit"
+	"github.com/phobologic/permcop/internal/config"
+	"github.com/phobologic/permcop/internal/parser"
 )
 
 // compiledPattern holds a pre-compiled pattern for fast repeated matching.

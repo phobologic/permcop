@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mikecafarella/permcop/internal/parser"
+	"github.com/phobologic/permcop/internal/parser"
 )
 
 // Decision is the outcome of a permission check.

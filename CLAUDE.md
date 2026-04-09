@@ -41,5 +41,5 @@ make cover      # coverage report → coverage.html
 ## Go conventions
 
 Follow the rules in `~/.claude/CLAUDE.md` (global Go rules). Additionally:
-- Module path: `github.com/mikecafarella/permcop`
+- Module path: `github.com/phobologic/permcop`
 - `goimports` import grouping: stdlib > third-party > local (with blank line separators)

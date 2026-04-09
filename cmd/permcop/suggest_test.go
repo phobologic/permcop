@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikecafarella/permcop/internal/audit"
-	"github.com/mikecafarella/permcop/internal/config"
+	"github.com/phobologic/permcop/internal/audit"
+	"github.com/phobologic/permcop/internal/config"
 )
 
 func TestParseSelection(t *testing.T) {

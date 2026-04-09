@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mikecafarella/permcop/internal/parser"
+	"github.com/phobologic/permcop/internal/parser"
 )
 
 // ReadPASSEntries reads the audit log file and any rotated copies (.1, .2, …),

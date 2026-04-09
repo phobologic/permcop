@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikecafarella/permcop/internal/parser"
+	"github.com/phobologic/permcop/internal/parser"
 )
 
 func TestLoggerMultipleWrites(t *testing.T) {

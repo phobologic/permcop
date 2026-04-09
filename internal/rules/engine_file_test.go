@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mikecafarella/permcop/internal/config"
-	"github.com/mikecafarella/permcop/internal/parser"
+	"github.com/phobologic/permcop/internal/config"
+	"github.com/phobologic/permcop/internal/parser"
 )
 
 func TestCheckFile_AllowRead(t *testing.T) {

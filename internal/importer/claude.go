@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mikecafarella/permcop/internal/config"
+	"github.com/phobologic/permcop/internal/config"
 )
 
 // ClaudeSettings is the subset of Claude Code's settings.json we care about.

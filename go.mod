@@ -1,4 +1,4 @@
-module github.com/mikecafarella/permcop
+module github.com/phobologic/permcop
 
 go 1.25.0
 

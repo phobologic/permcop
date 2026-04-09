@@ -23,7 +23,7 @@ permcop integrates as a Claude Code hook. Before Claude runs any Bash command, t
 ## Installation
 
 ```bash
-go install github.com/mikecafarella/permcop/cmd/permcop@latest
+go install github.com/phobologic/permcop/cmd/permcop@latest
 permcop init
 ```
 
@@ -269,7 +269,7 @@ They also do not apply to direct `Read`/`Write`/`Edit`/`MultiEdit` tool calls un
 >
 > If you have a use case where the current zone model falls short — or where
 > scoped write constraints would meaningfully improve your security posture —
-> please [open an issue](https://github.com/mikecafarella/permcop/issues) and
+> please [open an issue](https://github.com/phobologic/permcop/issues) and
 > describe it. Your feedback will shape whether and how this gets built.
 
 ## Tools governed

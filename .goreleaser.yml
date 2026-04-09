@@ -26,6 +26,19 @@ release:
 
     ---
 
+brews:
+  - name: permcop
+    repository:
+      owner: phobologic
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/phobologic/permcop"
+    description: "A rule-based permission filter for Claude Code PreToolUse hooks."
+    install: |
+      bin.install "permcop"
+    test: |
+      system "#{bin}/permcop version"
+
 changelog:
   sort: asc
   filters:

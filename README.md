@@ -1,5 +1,11 @@
 # permcop
 
+<div align="center">
+  <img src="permcop.jpg" alt="permcop" width="400">
+  <br>
+  <em>"Step away from the approve button, ma'am."</em>
+</div>
+
 A rule-based permission filter for [Claude Code](https://claude.ai/code). Intercepts Claude Code tool calls via PreToolUse hooks and evaluates them against an ordered rule set. Explicit deny rules block commands; explicit allow rules bypass Claude Code's approval prompt; everything else defers to Claude Code's own permission system.
 
 ## How it works

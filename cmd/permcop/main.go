@@ -1717,6 +1717,7 @@ unknown_variable_action = "deny" # "deny", "warn" (allow + log), or "allow"
 allow_sudo = false
 deny_subshells = false           # set true to block $(...) in all commands
 subshell_depth_limit = 3
+# strip_command_path = false     # set true so "sed" pattern matches /usr/bin/sed
 
 # Example rules — uncomment and adapt as needed:
 
@@ -1741,4 +1742,12 @@ subshell_depth_limit = 3
 # [[rules]]
 # name = "Write to tmp only"
 # allow_write = ["/tmp/**"]
+
+# [[rules]]
+# name = "Safe text tools"
+# allow = [
+#   # escalate_flags: don't pre-approve these flags — let Claude Code prompt instead
+#   { type = "prefix", pattern = "sed",  escalate_flags = ["-i", "--in-place"] },
+#   { type = "prefix", pattern = "find", escalate_flags = ["-delete", "-exec", "-execdir"] },
+# ]
 `

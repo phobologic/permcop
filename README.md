@@ -46,6 +46,7 @@ unknown_variable_action = "deny" # "deny" | "warn" | "allow"
 allow_sudo = false
 deny_subshells = false
 subshell_depth_limit = 3
+strip_command_path = false       # set true so "sed" pattern matches /usr/bin/sed
 
 # Rules are evaluated in order.
 # Pass 1: ANY deny pattern matching ANY unit → DENY immediately.
@@ -149,6 +150,51 @@ With this rule, `mv $TARGET /tmp/out.txt` is checked as `mv /home/user/data.txt 
 If a variable is not set in the environment, the rule cannot cover the unit (fail-closed). Other rules without `expand_variables` still apply normally as fallbacks.
 
 Similarly, `deny_subshells = true` blocks any command containing `$(...)` subshells.
+
+### Flag-level escalation
+
+Some commands are safe in general but should require explicit approval for specific flags — `sed -i` edits files in place, `find -delete` removes files, etc. Rather than blocking the whole command or pre-approving everything, `escalate_flags` on an allow pattern causes permcop to abstain for those specific flags, falling through to Claude Code's own permission check:
+
+```toml
+[[rules]]
+name = "Safe text tools"
+allow = [
+  { type = "prefix", pattern = "sed",  escalate_flags = ["-i", "--in-place"] },
+  { type = "prefix", pattern = "find", escalate_flags = ["-delete", "-exec", "-execdir"] },
+]
+```
+
+When `sed 's/foo/bar/' file` is seen, the pattern matches and the command is pre-approved. When `sed -i 's/foo/bar/' file` is seen, the pattern matches but `escalate_flags` fires — permcop abstains, and the decision falls through to Claude Code, which may prompt you for approval.
+
+This is distinct from a `deny` pattern: escalation means "not pre-approved, ask first" rather than "never allowed."
+
+`escalate_flags` is naturally scoped to its own pattern. In a rule with multiple allow patterns, only the pattern that matches the command is checked for escalation — `escalate_flags` on a `sed` pattern has no effect on `grep`.
+
+Flag matching handles the common cases:
+- **Short flags** (`-i`): exact match or bundled (`-ni` escalates when `-i` is listed)
+- **Long flags** (`--in-place`): exact match or with an attached value (`--in-place=.bak`)
+
+### Command path matching
+
+By default, permcop matches against the command string exactly as written. A pattern `prefix: "sed"` matches `sed` but not `/usr/bin/sed`.
+
+Set `strip_command_path = true` (globally in `[defaults]` or per rule) to strip the directory prefix from the first argv token before pattern matching:
+
+```toml
+[defaults]
+strip_command_path = true   # "sed" pattern now covers /usr/bin/sed, /usr/local/bin/sed, etc.
+```
+
+Or per rule:
+
+```toml
+[[rules]]
+name = "Safe sed"
+strip_command_path = true
+allow = [{ type = "prefix", pattern = "sed" }]
+```
+
+`strip_command_path` defaults to `false` to preserve backward compatibility. `deny_flags` command matching always uses the basename regardless of this setting.
 
 ### Per-unit coverage
 

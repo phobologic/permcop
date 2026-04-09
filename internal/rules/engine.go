@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gobwas/glob"
 
@@ -325,6 +326,9 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				u.Value = expanded
 				u.HasVariable = false
 			}
+			if u.Kind == parser.UnitCommand && e.cfg.EffectiveStripCommandPath(cr.rule) {
+				u.Value = stripCmdPath(u.Value)
+			}
 			if matched, patStr := matchesDenyPattern(cr, &u); matched {
 				denyMatches = append(denyMatches, audit.RuleMatch{
 					Rule:    cr.rule.Name,
@@ -388,6 +392,11 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				}
 				u.Value = expanded
 				u.HasVariable = false
+			}
+
+			// Strip command path for pattern matching.
+			if u.Kind == parser.UnitCommand && e.cfg.EffectiveStripCommandPath(cr.rule) {
+				u.Value = stripCmdPath(u.Value)
 			}
 
 			// Subshell: this rule's effective setting determines if it can cover the unit.
@@ -517,6 +526,18 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
 	return &Result{Entry: entry, FallThrough: true}, nil
 }
 
+// --- Command path stripping ---
+
+// stripCmdPath strips the directory prefix from the first token of a command
+// unit value. For example, "/usr/bin/sed -i file" becomes "sed -i file".
+// This allows patterns written with bare command names to match full-path invocations.
+func stripCmdPath(value string) string {
+	if i := strings.IndexByte(value, ' '); i >= 0 {
+		return filepath.Base(value[:i]) + value[i:]
+	}
+	return filepath.Base(value)
+}
+
 // --- Matching helpers ---
 
 func matchesDenyPattern(cr compiledRule, u *parser.CheckableUnit) (bool, string) {
@@ -525,7 +546,6 @@ func matchesDenyPattern(cr compiledRule, u *parser.CheckableUnit) (bool, string)
 		for _, cp := range cr.deny {
 			if cp.match(u.Value) {
 				return true, patternString(cp.p)
-
 			}
 		}
 	case parser.UnitReadFile:
@@ -544,13 +564,65 @@ func matchesDenyPattern(cr compiledRule, u *parser.CheckableUnit) (bool, string)
 	return false, ""
 }
 
+// escalateFlagPresent reports whether any escalate_flags from a pattern are
+// present in the command unit value. When true, the allow pattern abstains and
+// the unit falls through to Claude Code's own permission check.
+func escalateFlagPresent(escalateFlags []string, value string) bool {
+	if len(escalateFlags) == 0 {
+		return false
+	}
+	tokens := strings.Fields(value)
+	if len(tokens) <= 1 {
+		return false
+	}
+	for _, tok := range tokens[1:] {
+		for _, ef := range escalateFlags {
+			if flagTokenMatches(tok, ef) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// flagTokenMatches reports whether an argv token matches a flag specifier.
+//
+//   - Long flags (--foo): match exactly or with an attached value (--foo=bar).
+//   - Short flags (-x): match exactly or bundled with other single-letter flags (-xyz).
+func flagTokenMatches(token, flag string) bool {
+	switch {
+	case strings.HasPrefix(flag, "--"):
+		// Long flag: exact or --flag=value
+		return token == flag || strings.HasPrefix(token, flag+"=")
+	case len(flag) == 2 && flag[0] == '-':
+		// Short single-char flag: exact or bundled (e.g. -ni contains -i)
+		if token == flag {
+			return true
+		}
+		// Bundled: token must start with '-' (not '--') and consist entirely of letters.
+		if len(token) > 2 && token[0] == '-' && token[1] != '-' {
+			for _, c := range token[1:] {
+				if !unicode.IsLetter(c) {
+					return false
+				}
+			}
+			return strings.ContainsRune(token[1:], rune(flag[1]))
+		}
+	}
+	return false
+}
+
 func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit) (bool, string) {
 	switch u.Kind {
 	case parser.UnitCommand:
 		for _, cp := range cr.allow {
 			if cp.match(u.Value) {
+				// escalate_flags: if any listed flag is present, this pattern
+				// abstains — the unit is not covered and falls through to Claude Code.
+				if escalateFlagPresent(cp.p.EscalateFlags, u.Value) {
+					continue
+				}
 				return true, patternString(cp.p)
-
 			}
 		}
 	case parser.UnitReadFile:

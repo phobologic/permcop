@@ -818,3 +818,258 @@ func TestEngine_AssignmentCommandSubstitution_Deny(t *testing.T) {
 		t.Errorf("expected DENY (tk create has no rule), got ALLOW: %s", r.Reason)
 	}
 }
+
+// --- escalate_flags tests ---
+
+func TestEngine_EscalateFlags_FallsThrough(t *testing.T) {
+	t.Parallel()
+
+	// escalate_flags causes the unit to fall through (PASS), not be denied.
+	e := newTestEngine(t, []config.Rule{
+		{
+			Name: "safe-sed",
+			Allow: []config.Pattern{
+				{
+					Type:          config.PatternPrefix,
+					Pattern:       "sed",
+					EscalateFlags: []string{"-i", "--in-place"},
+				},
+			},
+		},
+	}, nil)
+
+	tests := []struct {
+		cmd         string
+		allowed     bool
+		fallThrough bool
+	}{
+		{"sed 's/foo/bar/' file.txt", true, false},
+		{"sed -n 's/foo/bar/p' file.txt", true, false},
+		{"sed -i 's/foo/bar/' file.txt", false, true},
+		{"sed --in-place 's/foo/bar/' file.txt", false, true},
+		{"sed --in-place=.bak 's/foo/bar/' file.txt", false, true},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.cmd, func(t *testing.T) {
+			t.Parallel()
+			r, err := e.Check(tc.cmd, "/tmp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Allowed != tc.allowed {
+				t.Errorf("Check(%q): allowed=%v, want %v", tc.cmd, r.Allowed, tc.allowed)
+			}
+			if r.FallThrough != tc.fallThrough {
+				t.Errorf("Check(%q): fallThrough=%v, want %v", tc.cmd, r.FallThrough, tc.fallThrough)
+			}
+		})
+	}
+}
+
+func TestEngine_EscalateFlags_BundledShortFlag(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, []config.Rule{
+		{
+			Name: "safe-sed",
+			Allow: []config.Pattern{
+				{
+					Type:          config.PatternPrefix,
+					Pattern:       "sed",
+					EscalateFlags: []string{"-i"},
+				},
+			},
+		},
+	}, nil)
+
+	tests := []struct {
+		cmd         string
+		allowed     bool
+		fallThrough bool
+	}{
+		{"sed -n 's/foo/bar/p' file.txt", true, false},   // -n is fine
+		{"sed -ni 's/foo/bar/p' file.txt", false, true},  // -ni bundles -i
+		{"sed -in 's/foo/bar/p' file.txt", false, true},  // -in bundles -i
+		{"sed -i 's/foo/bar/' file.txt", false, true},    // exact -i
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.cmd, func(t *testing.T) {
+			t.Parallel()
+			r, err := e.Check(tc.cmd, "/tmp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Allowed != tc.allowed {
+				t.Errorf("Check(%q): allowed=%v, want %v", tc.cmd, r.Allowed, tc.allowed)
+			}
+			if r.FallThrough != tc.fallThrough {
+				t.Errorf("Check(%q): fallThrough=%v, want %v", tc.cmd, r.FallThrough, tc.fallThrough)
+			}
+		})
+	}
+}
+
+func TestEngine_EscalateFlags_ScopedToPattern(t *testing.T) {
+	t.Parallel()
+
+	// escalate_flags on the sed pattern should not affect the grep pattern.
+	e := newTestEngine(t, []config.Rule{
+		{
+			Name: "text-tools",
+			Allow: []config.Pattern{
+				{
+					Type:          config.PatternPrefix,
+					Pattern:       "sed",
+					EscalateFlags: []string{"-i"},
+				},
+				{Type: config.PatternPrefix, Pattern: "grep"},
+			},
+		},
+	}, nil)
+
+	r, err := e.Check("grep -i pattern file.txt", "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Allowed {
+		t.Errorf("grep -i should be allowed (escalate_flags only on sed pattern): %s", r.Reason)
+	}
+}
+
+// --- strip_command_path tests ---
+
+func TestEngine_StripCommandPath_FullPath(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:  "sed-reads",
+			Allow: []config.Pattern{{Type: config.PatternPrefix, Pattern: "sed"}},
+		},
+	}, &config.Defaults{
+		SubshellDepthLimit:    3,
+		UnknownVariableAction: config.VariableActionDeny,
+		StripCommandPath:      true,
+	}, nil)
+
+	tests := []struct {
+		cmd     string
+		allowed bool
+	}{
+		{"sed 's/foo/bar/' file.txt", true},
+		{"/usr/bin/sed 's/foo/bar/' file.txt", true},
+		{"/usr/local/bin/sed 's/foo/bar/' file.txt", true},
+		{"/usr/bin/awk '{print}' file.txt", false}, // awk has no rule
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.cmd, func(t *testing.T) {
+			t.Parallel()
+			r, err := e.Check(tc.cmd, "/tmp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Allowed != tc.allowed {
+				t.Errorf("Check(%q): allowed=%v, want %v (reason: %s)", tc.cmd, r.Allowed, tc.allowed, r.Reason)
+			}
+		})
+	}
+}
+
+func TestEngine_StripCommandPath_PerRuleOverride(t *testing.T) {
+	t.Parallel()
+
+	// Global: strip off. Rule: strip on.
+	strip := true
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:             "sed-reads",
+			Allow:            []config.Pattern{{Type: config.PatternPrefix, Pattern: "sed"}},
+			StripCommandPath: &strip,
+		},
+	}, &config.Defaults{
+		SubshellDepthLimit:    3,
+		UnknownVariableAction: config.VariableActionDeny,
+		StripCommandPath:      false, // global off
+	}, nil)
+
+	r, err := e.Check("/usr/bin/sed 's/foo/bar/' file.txt", "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Allowed {
+		t.Errorf("expected ALLOW with per-rule strip_command_path=true: %s", r.Reason)
+	}
+}
+
+func TestEngine_StripCommandPath_OffByDefault(t *testing.T) {
+	t.Parallel()
+
+	// No strip_command_path set anywhere — full path should NOT match bare "sed" pattern.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name:  "sed-reads",
+			Allow: []config.Pattern{{Type: config.PatternPrefix, Pattern: "sed"}},
+		},
+	}, &config.Defaults{
+		SubshellDepthLimit:    3,
+		UnknownVariableAction: config.VariableActionDeny,
+	}, nil)
+
+	r, err := e.Check("/usr/bin/sed 's/foo/bar/' file.txt", "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Allowed {
+		t.Errorf("expected DENY: full path should not match bare 'sed' pattern without strip_command_path")
+	}
+}
+
+func TestEngine_StripCommandPath_WithEscalateFlags(t *testing.T) {
+	t.Parallel()
+
+	// strip_command_path + escalate_flags: /usr/bin/sed -i should fall through.
+	e := newTestEngineWithEnv(t, []config.Rule{
+		{
+			Name: "safe-sed",
+			Allow: []config.Pattern{
+				{
+					Type:          config.PatternPrefix,
+					Pattern:       "sed",
+					EscalateFlags: []string{"-i"},
+				},
+			},
+		},
+	}, &config.Defaults{
+		SubshellDepthLimit:    3,
+		UnknownVariableAction: config.VariableActionDeny,
+		StripCommandPath:      true,
+	}, nil)
+
+	tests := []struct {
+		cmd         string
+		allowed     bool
+		fallThrough bool
+	}{
+		{"/usr/bin/sed 's/foo/bar/' file.txt", true, false},
+		{"/usr/bin/sed -i 's/foo/bar/' file.txt", false, true},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.cmd, func(t *testing.T) {
+			t.Parallel()
+			r, err := e.Check(tc.cmd, "/tmp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Allowed != tc.allowed {
+				t.Errorf("Check(%q): allowed=%v, want %v", tc.cmd, r.Allowed, tc.allowed)
+			}
+			if r.FallThrough != tc.fallThrough {
+				t.Errorf("Check(%q): fallThrough=%v, want %v", tc.cmd, r.FallThrough, tc.fallThrough)
+			}
+		})
+	}
+}

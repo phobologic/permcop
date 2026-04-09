@@ -30,6 +30,13 @@ type Pattern struct {
 	// Type determines how Pattern is matched. Defaults to "glob" if unset.
 	Type    PatternType `toml:"type"`
 	Pattern string      `toml:"pattern"`
+	// EscalateFlags lists flags that, when present in a matching command, cause
+	// this allow pattern to abstain — the unit falls through to Claude Code's
+	// own permission check rather than being pre-approved. Only meaningful on
+	// allow patterns; ignored on deny patterns.
+	// Short single-char flags (e.g. "-i") also match when bundled (e.g. "-ni").
+	// Long flags (e.g. "--in-place") also match with an attached value (e.g. "--in-place=.bak").
+	EscalateFlags []string `toml:"escalate_flags"`
 }
 
 // UnmarshalText lets a bare TOML string ("git log") decode as a glob Pattern.
@@ -48,6 +55,13 @@ func (p *Pattern) UnmarshalTOML(data interface{}) error {
 		}
 		if pat, ok := v["pattern"].(string); ok {
 			p.Pattern = pat
+		}
+		if raw, ok := v["escalate_flags"].([]interface{}); ok {
+			for _, f := range raw {
+				if s, ok := f.(string); ok {
+					p.EscalateFlags = append(p.EscalateFlags, s)
+				}
+			}
 		}
 	}
 	if p.Type == "" {
@@ -86,6 +100,11 @@ type Rule struct {
 	// patterns. If any variable in the unit is not set in the environment,
 	// this rule cannot cover the unit (fail-closed). Defaults to false.
 	ExpandVariables bool `toml:"expand_variables"`
+	// StripCommandPath, when true, strips the directory prefix from the first
+	// token of a command unit before matching allow and deny patterns. This
+	// allows a rule with pattern "sed" to match both "sed" and "/usr/bin/sed".
+	// Overrides the global default when set. Defaults to nil (use global default).
+	StripCommandPath *bool `toml:"strip_command_path"`
 }
 
 // EffectiveDenySubshells returns whether subshells should be denied,
@@ -109,12 +128,26 @@ type Defaults struct {
 	// DenySubshells, when true globally, causes any unit with a subshell to be
 	// denied unless a rule explicitly overrides with deny_subshells = false.
 	DenySubshells bool `toml:"deny_subshells"`
+	// StripCommandPath, when true globally, strips the directory prefix from the
+	// first token of a command unit before pattern matching. Allows rules written
+	// with bare command names (e.g. "sed") to match full-path invocations
+	// (e.g. "/usr/bin/sed"). Defaults to false.
+	StripCommandPath bool `toml:"strip_command_path"`
 }
 
 // Config is the top-level configuration structure.
 type Config struct {
 	Defaults Defaults `toml:"defaults"`
 	Rules    []Rule   `toml:"rules"`
+}
+
+// EffectiveStripCommandPath returns whether path stripping is enabled for a rule,
+// using the global default if the rule doesn't override it.
+func (c *Config) EffectiveStripCommandPath(r *Rule) bool {
+	if r != nil && r.StripCommandPath != nil {
+		return *r.StripCommandPath
+	}
+	return c.Defaults.StripCommandPath
 }
 
 // EffectiveVariableAction returns the variable action for a rule,

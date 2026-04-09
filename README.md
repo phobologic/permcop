@@ -25,7 +25,8 @@ permcop integrates as a Claude Code hook. Before Claude runs any Bash command, t
 **Homebrew (macOS/Linux):**
 
 ```bash
-brew install phobologic/tap/permcop
+brew tap phobologic/tap
+brew install permcop
 permcop init
 ```
 

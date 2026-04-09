@@ -888,10 +888,10 @@ func TestEngine_EscalateFlags_BundledShortFlag(t *testing.T) {
 		allowed     bool
 		fallThrough bool
 	}{
-		{"sed -n 's/foo/bar/p' file.txt", true, false},   // -n is fine
-		{"sed -ni 's/foo/bar/p' file.txt", false, true},  // -ni bundles -i
-		{"sed -in 's/foo/bar/p' file.txt", false, true},  // -in bundles -i
-		{"sed -i 's/foo/bar/' file.txt", false, true},    // exact -i
+		{"sed -n 's/foo/bar/p' file.txt", true, false},  // -n is fine
+		{"sed -ni 's/foo/bar/p' file.txt", false, true}, // -ni bundles -i
+		{"sed -in 's/foo/bar/p' file.txt", false, true}, // -in bundles -i
+		{"sed -i 's/foo/bar/' file.txt", false, true},   // exact -i
 	}
 	for _, tc := range tests {
 		tc := tc

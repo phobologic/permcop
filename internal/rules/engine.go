@@ -251,6 +251,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 	entry := audit.Entry{
 		Timestamp:       time.Now(),
 		OriginalCommand: command,
+		CWD:             cwd,
 	}
 
 	deny := func(reason, rule, pattern string, unit *parser.CheckableUnit) (*Result, error) {

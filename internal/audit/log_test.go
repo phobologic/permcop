@@ -225,6 +225,39 @@ func TestLoggerRotationPrunesOldest(t *testing.T) {
 	}
 }
 
+func TestTextLineCWD(t *testing.T) {
+	t.Parallel()
+
+	line := textLine(Entry{
+		Timestamp:       time.Now(),
+		Decision:        DecisionPassThrough,
+		Reason:          "no matching rule; deferred to Claude Code",
+		OriginalCommand: "git cherry-pick abc1234",
+		CWD:             "/Users/mike/git/pbp/.worktrees/implementer-1",
+	})
+
+	if !strings.Contains(line, "cwd:") {
+		t.Errorf("expected cwd: line in output; got:\n%s", line)
+	}
+	if !strings.Contains(line, "/Users/mike/git/pbp/.worktrees/implementer-1") {
+		t.Errorf("expected cwd path in output; got:\n%s", line)
+	}
+}
+
+func TestTextLineNoCWDWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	line := textLine(Entry{
+		Timestamp:       time.Now(),
+		Decision:        DecisionAllow,
+		OriginalCommand: "git status",
+	})
+
+	if strings.Contains(line, "cwd:") {
+		t.Errorf("expected no cwd: line when CWD is empty; got:\n%s", line)
+	}
+}
+
 func TestLoggerCloseIdempotent(t *testing.T) {
 	t.Parallel()
 

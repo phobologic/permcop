@@ -49,6 +49,7 @@ type Entry struct {
 	DecidingPattern string                // pattern string that matched; empty if safety check triggered
 	DecidingUnit    *parser.CheckableUnit // the specific unit that triggered the decision
 	OriginalCommand string
+	CWD             string // working directory of the process that invoked the hook
 	Units           []parser.CheckableUnit
 	RuleMatches     []RuleMatch // per-unit match details; populated by the engine
 }
@@ -187,6 +188,9 @@ func textLine(e Entry) string {
 	sb.WriteString(header.String())
 	sb.WriteString("\n")
 	fmt.Fprintf(&sb, "  original: %s\n", e.OriginalCommand)
+	if e.CWD != "" {
+		fmt.Fprintf(&sb, "  cwd:      %s\n", e.CWD)
+	}
 
 	if len(e.Units) > 0 {
 		unitStrs := make([]string, len(e.Units))
@@ -243,6 +247,9 @@ func jsonLine(e Entry) (string, error) {
 		obj["deciding_unit"] = e.DecidingUnit.Value
 	}
 	obj["original_command"] = e.OriginalCommand
+	if e.CWD != "" {
+		obj["cwd"] = e.CWD
+	}
 
 	unitVals := make([]string, len(e.Units))
 	for i, u := range e.Units {

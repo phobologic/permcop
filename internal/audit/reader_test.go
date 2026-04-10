@@ -261,6 +261,34 @@ func TestReadPASSEntries_TextOriginalCommand(t *testing.T) {
 	}
 }
 
+func TestReadPASSEntries_CWDRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	now := time.Now().Truncate(time.Second)
+	worktreePath := "/Users/mike/git/pbp/.worktrees/implementer-1"
+
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			path := filepath.Join(dir, format+".log")
+			e := makePassEntry("git cherry-pick abc1234", now)
+			e.CWD = worktreePath
+			writeEntries(t, path, format, []Entry{e})
+
+			got, err := ReadPASSEntries(path, 10)
+			if err != nil {
+				t.Fatalf("ReadPASSEntries: %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("expected 1 entry, got %d", len(got))
+			}
+			if got[0].CWD != worktreePath {
+				t.Errorf("CWD: got %q, want %q", got[0].CWD, worktreePath)
+			}
+		})
+	}
+}
+
 func TestReadPASSEntries_RotatedFilesMissing(t *testing.T) {
 	t.Parallel()
 

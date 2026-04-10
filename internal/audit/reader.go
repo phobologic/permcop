@@ -87,6 +87,7 @@ func parseJSONLines(lines []string) ([]Entry, error) {
 		tsStr, _ := obj["timestamp"].(string)
 		t, _ := time.Parse(time.RFC3339, tsStr)
 		cmd, _ := obj["original_command"].(string)
+		cwd, _ := obj["cwd"].(string)
 
 		var units []parser.CheckableUnit
 		if us, ok := obj["units"].([]interface{}); ok {
@@ -121,6 +122,7 @@ func parseJSONLines(lines []string) ([]Entry, error) {
 			Timestamp:       t,
 			Decision:        DecisionPassThrough,
 			OriginalCommand: cmd,
+			CWD:             cwd,
 			Units:           units,
 			RuleMatches:     matches,
 		})
@@ -153,6 +155,8 @@ func parseTextLines(lines []string) ([]Entry, error) {
 		switch {
 		case strings.HasPrefix(trimmed, "original: "):
 			current.OriginalCommand = strings.TrimPrefix(trimmed, "original: ")
+		case strings.HasPrefix(trimmed, "cwd:"):
+			current.CWD = strings.TrimSpace(strings.TrimPrefix(trimmed, "cwd:"))
 		case strings.HasPrefix(trimmed, "units:"):
 			unitStr := strings.TrimSpace(strings.TrimPrefix(trimmed, "units:"))
 			for len(unitStr) > 0 {

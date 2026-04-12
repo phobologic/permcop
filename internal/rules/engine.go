@@ -451,12 +451,13 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 // CheckFile evaluates a direct file-access tool call (Read, Write, Edit, MultiEdit)
 // against the rule set. kind must be parser.UnitReadFile or parser.UnitWriteFile.
 // path should be an absolute path.
-func (e *Engine) CheckFile(path string, kind parser.UnitKind) (*Result, error) {
+func (e *Engine) CheckFile(path string, kind parser.UnitKind, cwd string) (*Result, error) {
 	unit := parser.CheckableUnit{Kind: kind, Value: path}
 	entry := audit.Entry{
 		Timestamp:       time.Now(),
 		OriginalCommand: fmt.Sprintf("<%s %s>", kind, path),
 		Units:           []parser.CheckableUnit{unit},
+		CWD:             cwd,
 	}
 
 	deny := func(reason, rule, pattern string) (*Result, error) {

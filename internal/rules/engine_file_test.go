@@ -18,12 +18,15 @@ func TestCheckFile_AllowRead(t *testing.T) {
 		},
 	}, nil)
 
-	r, err := e.CheckFile("/tmp/foo.txt", parser.UnitReadFile)
+	r, err := e.CheckFile("/tmp/foo.txt", parser.UnitReadFile, "/my/cwd")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !r.Allowed {
 		t.Errorf("expected ALLOW for read in /tmp, got DENY: %s", r.Reason)
+	}
+	if r.CWD != "/my/cwd" {
+		t.Errorf("expected CWD=%q in audit entry, got %q", "/my/cwd", r.CWD)
 	}
 }
 
@@ -39,13 +42,13 @@ func TestCheckFile_DenyRead(t *testing.T) {
 	}, nil)
 
 	// Allowed path
-	r, _ := e.CheckFile("/tmp/ok.txt", parser.UnitReadFile)
+	r, _ := e.CheckFile("/tmp/ok.txt", parser.UnitReadFile, "")
 	if !r.Allowed {
 		t.Errorf("expected ALLOW for /tmp/ok.txt, got DENY: %s", r.Reason)
 	}
 
 	// Denied path
-	r2, _ := e.CheckFile("/tmp/secrets/key.pem", parser.UnitReadFile)
+	r2, _ := e.CheckFile("/tmp/secrets/key.pem", parser.UnitReadFile, "")
 	if r2.Allowed {
 		t.Error("expected DENY for /tmp/secrets/key.pem, got ALLOW")
 	}
@@ -64,12 +67,12 @@ func TestCheckFile_AllowWrite(t *testing.T) {
 		},
 	}, nil)
 
-	r, _ := e.CheckFile("/tmp/build/output.bin", parser.UnitWriteFile)
+	r, _ := e.CheckFile("/tmp/build/output.bin", parser.UnitWriteFile, "")
 	if !r.Allowed {
 		t.Errorf("expected ALLOW for write in /tmp/build, got DENY: %s", r.Reason)
 	}
 
-	r2, _ := e.CheckFile("/tmp/other.txt", parser.UnitWriteFile)
+	r2, _ := e.CheckFile("/tmp/other.txt", parser.UnitWriteFile, "")
 	if r2.Allowed {
 		t.Error("expected DENY for write outside /tmp/build, got ALLOW")
 	}
@@ -86,7 +89,7 @@ func TestCheckFile_ReadRuleDoesNotCoverWrite(t *testing.T) {
 		},
 	}, nil)
 
-	r, _ := e.CheckFile("/tmp/foo.txt", parser.UnitWriteFile)
+	r, _ := e.CheckFile("/tmp/foo.txt", parser.UnitWriteFile, "")
 	if r.Allowed {
 		t.Error("expected DENY: allow_read should not cover write operations")
 	}
@@ -97,7 +100,7 @@ func TestCheckFile_DefaultDeny(t *testing.T) {
 
 	e := newTestEngine(t, nil, nil)
 
-	r, _ := e.CheckFile("/etc/passwd", parser.UnitReadFile)
+	r, _ := e.CheckFile("/etc/passwd", parser.UnitReadFile, "")
 	if r.Allowed {
 		t.Error("expected DENY for /etc/passwd with no rules")
 	}
@@ -110,7 +113,7 @@ func TestCheckFile_EmptyPath(t *testing.T) {
 		{Name: "allow all reads", AllowRead: []string{"**"}},
 	}, nil)
 
-	r, _ := e.CheckFile("", parser.UnitReadFile)
+	r, _ := e.CheckFile("", parser.UnitReadFile, "")
 	if r.Allowed {
 		t.Error("expected DENY for empty path")
 	}
@@ -133,14 +136,14 @@ func TestEngine_TildeExpansion(t *testing.T) {
 
 	// A path inside ~/.ssh should be denied.
 	sshKey := homeDir + "/.ssh/id_rsa"
-	r, _ := e.CheckFile(sshKey, parser.UnitReadFile)
+	r, _ := e.CheckFile(sshKey, parser.UnitReadFile, "")
 	if r.Allowed {
 		t.Errorf("expected DENY for %s with deny_read=[~/.ssh/**], got ALLOW", sshKey)
 	}
 
 	// An unrelated path should not be denied (falls through to default deny, but not by this rule).
 	other := homeDir + "/Documents/notes.txt"
-	r2, _ := e.CheckFile(other, parser.UnitReadFile)
+	r2, _ := e.CheckFile(other, parser.UnitReadFile, "")
 	if r2.Allowed {
 		t.Error("expected DENY for unrelated path (no allow rule), got ALLOW")
 	}
@@ -165,7 +168,7 @@ func TestCheckFile_AuditLog(t *testing.T) {
 		SubshellDepthLimit:    3,
 	})
 
-	_, _ = e.CheckFile("/tmp/test.txt", parser.UnitReadFile)
+	_, _ = e.CheckFile("/tmp/test.txt", parser.UnitReadFile, "")
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {

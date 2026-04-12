@@ -226,6 +226,7 @@ func runCheck() {
 			Decision:        audit.DecisionDeny,
 			Reason:          reason,
 			OriginalCommand: "(unknown — hook input error)",
+			CWD:             cwd,
 		})
 		writeHookDecision("deny", reason)
 		os.Exit(0)
@@ -257,7 +258,7 @@ func runCheck() {
 			denyAndExit("permcop: empty file_path in Read hook input")
 		}
 		path := absolutePath(in.File.FilePath, cwd)
-		result, err = engine.CheckFile(path, parser.UnitReadFile)
+		result, err = engine.CheckFile(path, parser.UnitReadFile, cwd)
 		if err != nil {
 			denyAndExit(fmt.Sprintf("permcop: check error: %v", err))
 		}
@@ -267,7 +268,7 @@ func runCheck() {
 			denyAndExit(fmt.Sprintf("permcop: empty file_path in %s hook input", in.Kind))
 		}
 		path := absolutePath(in.File.FilePath, cwd)
-		result, err = engine.CheckFile(path, parser.UnitWriteFile)
+		result, err = engine.CheckFile(path, parser.UnitWriteFile, cwd)
 		if err != nil {
 			denyAndExit(fmt.Sprintf("permcop: check error: %v", err))
 		}
@@ -280,14 +281,11 @@ func runCheck() {
 	// No rule matched — output nothing and exit 0 so Claude Code's own
 	// permission system handles the decision. Still log for audit trail.
 	if result.FallThrough {
-		_ = logger.Log(audit.Entry{
-			Timestamp:       time.Now(),
-			Decision:        audit.DecisionPassThrough,
-			Reason:          "no matching rule; deferred to Claude Code",
-			OriginalCommand: result.OriginalCommand,
-			Units:           result.Units,
-			RuleMatches:     result.RuleMatches,
-		})
+		entry := result.Entry
+		entry.Timestamp = time.Now()
+		entry.Decision = audit.DecisionPassThrough
+		entry.Reason = "no matching rule; deferred to Claude Code"
+		_ = logger.Log(entry)
 		os.Exit(0)
 	}
 

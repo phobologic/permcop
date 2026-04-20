@@ -1470,6 +1470,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r, "tilde expansion in scope entry")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 
 	// --- Scenario 5: ${VAR} expansion in scope entry ---
@@ -1481,6 +1484,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r, "var expansion in scope entry")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 
 	// --- Scenario 6: ${VAR} unset — entry dropped, other entries still usable ---
@@ -1493,6 +1499,9 @@ func TestEngine_PathScope(t *testing.T) {
 		}
 		// ${UNSET_XYZ} is dropped but /proj survives; /proj/file is in-scope.
 		assertAllowed(t, r, "unset var entry dropped, other survives")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 
 	// --- Scenario 7: ${VAR}="" — entry dropped ---
@@ -1505,6 +1514,9 @@ func TestEngine_PathScope(t *testing.T) {
 		}
 		// Scope is empty after dropping the entry; candidate present → abstain.
 		assertFallThrough(t, r, "empty var entry dropped, scope empty")
+		if dm := lastDenyMatch(r.RuleMatches); dm == nil {
+			t.Errorf("expected a deny RuleMatch for fall-through; got %v", r.RuleMatches)
+		}
 	})
 
 	// --- Scenario 8: all scope entries dropped — abstains with candidates, covers without ---
@@ -1519,6 +1531,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertFallThrough(t, r1, "all-dropped scope with candidate")
+		if dm := lastDenyMatch(r1.RuleMatches); dm == nil {
+			t.Errorf("expected a deny RuleMatch for fall-through; got %v", r1.RuleMatches)
+		}
 
 		// Without path candidates: vacuous pass → allow.
 		r2, err := e.Check("cp -r", "/tmp")
@@ -1526,6 +1541,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r2, "all-dropped scope without candidates")
+		if !hasAllowMatch(r2.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r' (vacuous pass)")
+		}
 	})
 
 	// --- Scenario 9: nonexistent resolved path works lexically ---
@@ -1537,6 +1555,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r, "nonexistent path lexically in-scope")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 
 	// --- Scenario 10: multiple path args, all in-scope ---
@@ -1548,6 +1569,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r, "all path args in-scope")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 
 	// --- Scenario 11: multiple path args, one out-of-scope ---
@@ -1559,6 +1583,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertFallThrough(t, r, "one path arg out-of-scope")
+		if dm := lastDenyMatch(r.RuleMatches); dm == nil {
+			t.Errorf("expected a deny RuleMatch for fall-through; got %v", r.RuleMatches)
+		}
 	})
 
 	// --- Scenario 12: no path candidates — vacuous pass ---
@@ -1584,6 +1611,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r, "root scope covers any absolute path")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 
 	// --- Scenario 14: escalate_flags checked before path_scope ---
@@ -1606,6 +1636,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertFallThrough(t, r1, "escalate fires before path_scope check")
+		if dm := lastDenyMatch(r1.RuleMatches); dm == nil {
+			t.Errorf("r1: expected a deny RuleMatch for fall-through; got %v", r1.RuleMatches)
+		}
 
 		// No --force, in-scope: escalate doesn't fire, path_scope passes → allow.
 		r2, err := e.Check("cp /proj/file", "/tmp")
@@ -1613,6 +1646,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r2, "no escalate flag, in-scope: allowed")
+		if !hasAllowMatch(r2.RuleMatches, "r") {
+			t.Errorf("r2: expected allow RuleMatch from rule 'r'")
+		}
 
 		// No --force, out-of-scope: escalate doesn't fire, path_scope abstains → fall-through.
 		r3, err := e.Check("cp /etc/passwd", "/tmp")
@@ -1620,6 +1656,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertFallThrough(t, r3, "no escalate flag, out-of-scope: fall-through")
+		if dm := lastDenyMatch(r3.RuleMatches); dm == nil {
+			t.Errorf("r3: expected a deny RuleMatch for fall-through; got %v", r3.RuleMatches)
+		}
 	})
 
 	// --- Scenario 15: deny in Pass 1 beats allow with path_scope in Pass 2 ---
@@ -1675,6 +1714,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertFallThrough(t, r, "unexpanded var in argv: rule abstains")
+		if dm := lastDenyMatch(r.RuleMatches); dm == nil {
+			t.Errorf("expected a deny RuleMatch for fall-through; got %v", r.RuleMatches)
+		}
 	})
 
 	// --- Scenario 17: command at position 0 with "/" is not a candidate ---
@@ -1687,6 +1729,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r, "pos-0 token not a candidate")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 
 	// --- Scenario 18: quoted arg with spaces — only the path arg is a candidate ---
@@ -1701,6 +1746,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r, "quoted arg with spaces: only path arg is candidate")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 
 	// --- Scenario 19: --out=/etc/passwd with scope /proj — RHS extracted, out-of-scope ---
@@ -1712,6 +1760,9 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertFallThrough(t, r, "--out=/etc/passwd RHS out-of-scope")
+		if dm := lastDenyMatch(r.RuleMatches); dm == nil {
+			t.Errorf("expected a deny RuleMatch for fall-through; got %v", r.RuleMatches)
+		}
 	})
 
 	// --- Scenario 20: -o=/proj/file with scope /proj — RHS in-scope ---
@@ -1723,5 +1774,8 @@ func TestEngine_PathScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertAllowed(t, r, "-o=/proj/file RHS in-scope")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
 	})
 }

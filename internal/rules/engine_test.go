@@ -1073,3 +1073,108 @@ func TestEngine_StripCommandPath_WithEscalateFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestCompileScopeEntries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		pathScope      []string // nil means field omitted
+		homeDir        string
+		env            map[string]string
+		wantConfigured bool
+		wantScope      []string
+	}{
+		{
+			name:           "nil path_scope: scopeConfigured false, scope nil",
+			pathScope:      nil,
+			wantConfigured: false,
+			wantScope:      nil,
+		},
+		{
+			name:           "tilde expansion with homeDir",
+			pathScope:      []string{"~/proj"},
+			homeDir:        "/home/x",
+			wantConfigured: true,
+			wantScope:      []string{"/home/x/proj"},
+		},
+		{
+			name:           "variable expansion DIR=/foo",
+			pathScope:      []string{"${DIR}"},
+			env:            map[string]string{"DIR": "/foo"},
+			wantConfigured: true,
+			wantScope:      []string{"/foo"},
+		},
+		{
+			name:           "variable unset: entry dropped, scopeConfigured true",
+			pathScope:      []string{"${DIR}"},
+			env:            map[string]string{},
+			wantConfigured: true,
+			wantScope:      nil,
+		},
+		{
+			name:           "variable set to empty: entry dropped, scopeConfigured true",
+			pathScope:      []string{"${DIR}"},
+			env:            map[string]string{"DIR": ""},
+			wantConfigured: true,
+			wantScope:      nil,
+		},
+		{
+			name:           "relative path dropped",
+			pathScope:      []string{"relative/path"},
+			wantConfigured: true,
+			wantScope:      nil,
+		},
+		{
+			name:           "dotdot and trailing slash cleaned",
+			pathScope:      []string{"/foo/bar/../baz/"},
+			wantConfigured: true,
+			wantScope:      []string{"/foo/baz"},
+		},
+		{
+			name:           "empty pathScope slice: scopeConfigured true, scope nil",
+			pathScope:      []string{},
+			wantConfigured: true,
+			wantScope:      nil,
+		},
+		{
+			name:           "tilde with empty homeDir: entry dropped",
+			pathScope:      []string{"~/proj"},
+			homeDir:        "",
+			wantConfigured: true,
+			wantScope:      nil,
+		},
+		{
+			name:           "compound path with empty-valued variable: entry dropped",
+			pathScope:      []string{"/prefix/${DIR}/suffix"},
+			env:            map[string]string{"DIR": ""},
+			wantConfigured: true,
+			wantScope:      nil,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := tc.env
+			if env == nil {
+				env = map[string]string{}
+			}
+			configured, scope := compileScopeEntries(tc.pathScope, tc.homeDir, env)
+
+			if configured != tc.wantConfigured {
+				t.Errorf("scopeConfigured: got %v, want %v", configured, tc.wantConfigured)
+			}
+			if len(scope) != len(tc.wantScope) {
+				t.Fatalf("scope: got %v, want %v", scope, tc.wantScope)
+			}
+			for i, want := range tc.wantScope {
+				if scope[i] != want {
+					t.Errorf("scope[%d]: got %q, want %q", i, scope[i], want)
+				}
+			}
+		})
+	}
+}

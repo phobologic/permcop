@@ -756,6 +756,9 @@ func pathsInScope(args []string, scope []string, scopeConfigured bool, cwd, home
 	if !scopeConfigured {
 		return true, ""
 	}
+	if len(args) == 0 {
+		return true, ""
+	}
 
 	// Collect path candidates from args[1:].
 	var candidates []string

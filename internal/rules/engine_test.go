@@ -1199,6 +1199,20 @@ func TestPathsInScope(t *testing.T) {
 			want:            true,
 		},
 		{
+			name:            "nil args: vacuous true",
+			args:            nil,
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            true,
+		},
+		{
+			name:            "empty args: vacuous true",
+			args:            []string{},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            true,
+		},
+		{
 			name:            "no candidates: vacuous true",
 			args:            []string{"git", "status"},
 			scope:           []string{"/proj"},

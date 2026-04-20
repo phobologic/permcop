@@ -17,46 +17,46 @@ func TestParse(t *testing.T) {
 			name:    "simple command",
 			command: "git status",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "git status"},
+				{Kind: UnitCommand, Value: "git status", Args: []string{"git", "status"}},
 			},
 		},
 		{
 			name:    "AND chain",
 			command: "git status && git log",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "git status"},
-				{Kind: UnitCommand, Value: "git log"},
+				{Kind: UnitCommand, Value: "git status", Args: []string{"git", "status"}},
+				{Kind: UnitCommand, Value: "git log", Args: []string{"git", "log"}},
 			},
 		},
 		{
 			name:    "OR chain",
 			command: "git fetch || echo failed",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "git fetch"},
-				{Kind: UnitCommand, Value: "echo failed"},
+				{Kind: UnitCommand, Value: "git fetch", Args: []string{"git", "fetch"}},
+				{Kind: UnitCommand, Value: "echo failed", Args: []string{"echo", "failed"}},
 			},
 		},
 		{
 			name:    "semicolon chain",
 			command: "echo a; echo b",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo a"},
-				{Kind: UnitCommand, Value: "echo b"},
+				{Kind: UnitCommand, Value: "echo a", Args: []string{"echo", "a"}},
+				{Kind: UnitCommand, Value: "echo b", Args: []string{"echo", "b"}},
 			},
 		},
 		{
 			name:    "pipe",
 			command: "git log --oneline | head -5",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "git log --oneline"},
-				{Kind: UnitCommand, Value: "head -5"},
+				{Kind: UnitCommand, Value: "git log --oneline", Args: []string{"git", "log", "--oneline"}},
+				{Kind: UnitCommand, Value: "head -5", Args: []string{"head", "-5"}},
 			},
 		},
 		{
 			name:    "output redirect",
 			command: "echo hello > /tmp/out.txt",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo hello"},
+				{Kind: UnitCommand, Value: "echo hello", Args: []string{"echo", "hello"}},
 				{Kind: UnitWriteFile, Value: "/tmp/out.txt"},
 			},
 		},
@@ -64,7 +64,7 @@ func TestParse(t *testing.T) {
 			name:    "append redirect",
 			command: "echo hello >> /tmp/out.txt",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo hello"},
+				{Kind: UnitCommand, Value: "echo hello", Args: []string{"echo", "hello"}},
 				{Kind: UnitWriteFile, Value: "/tmp/out.txt"},
 			},
 		},
@@ -72,7 +72,7 @@ func TestParse(t *testing.T) {
 			name:    "input redirect",
 			command: "cat < /tmp/input.txt",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "cat"},
+				{Kind: UnitCommand, Value: "cat", Args: []string{"cat"}},
 				{Kind: UnitReadFile, Value: "/tmp/input.txt"},
 			},
 		},
@@ -80,7 +80,7 @@ func TestParse(t *testing.T) {
 			name:    "variable in argument",
 			command: "echo $HOME",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo $HOME", HasVariable: true},
+				{Kind: UnitCommand, Value: "echo $HOME", Args: []string{"echo", "$HOME"}, HasVariable: true},
 			},
 		},
 		{
@@ -89,29 +89,29 @@ func TestParse(t *testing.T) {
 			// The outer command has a subshell marker, AND the subshell's command is
 			// extracted as its own unit so it can be independently permission-checked.
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo $(...)", HasSubshell: true},
-				{Kind: UnitCommand, Value: "whoami"},
+				{Kind: UnitCommand, Value: "echo $(...)", Args: []string{"echo", "$(...)"}, HasSubshell: true},
+				{Kind: UnitCommand, Value: "whoami", Args: []string{"whoami"}},
 			},
 		},
 		{
 			name:    "quoted argument preserved",
 			command: `git commit -m "fix bug"`,
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "git commit -m fix bug"},
+				{Kind: UnitCommand, Value: "git commit -m fix bug", Args: []string{"git", "commit", "-m", "fix bug"}},
 			},
 		},
 		{
 			name:    "single quoted argument",
 			command: "echo 'hello world'",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo hello world"},
+				{Kind: UnitCommand, Value: "echo hello world", Args: []string{"echo", "hello world"}},
 			},
 		},
 		{
 			name:    "relative redirect resolved to cwd",
 			command: "echo hi > output.txt",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo hi"},
+				{Kind: UnitCommand, Value: "echo hi", Args: []string{"echo", "hi"}},
 				{Kind: UnitWriteFile, Value: "/tmp/testcwd/output.txt"},
 			},
 		},
@@ -119,44 +119,44 @@ func TestParse(t *testing.T) {
 			name:    "subshell inside double-quoted argument",
 			command: `git commit -m "$(cat file)"`,
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "git commit -m $(...)", HasSubshell: true},
-				{Kind: UnitCommand, Value: "cat file"},
+				{Kind: UnitCommand, Value: "git commit -m $(...)", Args: []string{"git", "commit", "-m", "$(...)"}, HasSubshell: true},
+				{Kind: UnitCommand, Value: "cat file", Args: []string{"cat", "file"}},
 			},
 		},
 		{
 			name:    "subshell with heredoc inside double-quoted argument",
 			command: "git commit -m \"$(cat <<'EOF'\nsome message\nEOF\n)\"",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "git commit -m $(...)", HasSubshell: true},
-				{Kind: UnitCommand, Value: "cat"},
+				{Kind: UnitCommand, Value: "git commit -m $(...)", Args: []string{"git", "commit", "-m", "$(...)"}, HasSubshell: true},
+				{Kind: UnitCommand, Value: "cat", Args: []string{"cat"}},
 			},
 		},
 		{
 			name:    "fd redirect 2>&1 no extra unit",
 			command: "make install 2>&1",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "make install"},
+				{Kind: UnitCommand, Value: "make install", Args: []string{"make", "install"}},
 			},
 		},
 		{
 			name:    "fd redirect 1>&2 no extra unit",
 			command: "echo hi 1>&2",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo hi"},
+				{Kind: UnitCommand, Value: "echo hi", Args: []string{"echo", "hi"}},
 			},
 		},
 		{
 			name:    "fd redirect <&0 no extra unit",
 			command: "cat <&0",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "cat"},
+				{Kind: UnitCommand, Value: "cat", Args: []string{"cat"}},
 			},
 		},
 		{
 			name:    "real file redirect with fd redirect",
 			command: "cmd >out.txt 2>&1",
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "cmd"},
+				{Kind: UnitCommand, Value: "cmd", Args: []string{"cmd"}},
 				{Kind: UnitWriteFile, Value: "/tmp/testcwd/out.txt"},
 			},
 		},
@@ -171,7 +171,7 @@ func TestParse(t *testing.T) {
 			// The outer assignment emits no command unit (no args), but the
 			// command substitution value is extracted and checked independently.
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "whoami"},
+				{Kind: UnitCommand, Value: "whoami", Args: []string{"whoami"}},
 			},
 		},
 		{
@@ -180,8 +180,8 @@ func TestParse(t *testing.T) {
 			// The tk create inside $(...) must be extracted as a unit; echo $T7 is
 			// the second statement.
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "tk create foo -t task"},
-				{Kind: UnitCommand, Value: "echo $T7", HasVariable: true},
+				{Kind: UnitCommand, Value: "tk create foo -t task", Args: []string{"tk", "create", "foo", "-t", "task"}},
+				{Kind: UnitCommand, Value: "echo $T7", Args: []string{"echo", "$T7"}, HasVariable: true},
 			},
 		},
 		{
@@ -189,7 +189,21 @@ func TestParse(t *testing.T) {
 			command: "FOO=bar echo hi",
 			// No subshell in the assignment value, so only the command unit is emitted.
 			wantUnits: []CheckableUnit{
-				{Kind: UnitCommand, Value: "echo hi"},
+				{Kind: UnitCommand, Value: "echo hi", Args: []string{"echo", "hi"}},
+			},
+		},
+		{
+			name:    "args populated for sed with flag and path",
+			command: "sed -i /proj/file",
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "sed -i /proj/file", Args: []string{"sed", "-i", "/proj/file"}},
+			},
+		},
+		{
+			name:    "args with double-quoted space-containing argument",
+			command: `cp "my file.txt" /tmp/`,
+			wantUnits: []CheckableUnit{
+				{Kind: UnitCommand, Value: "cp my file.txt /tmp/", Args: []string{"cp", "my file.txt", "/tmp/"}},
 			},
 		},
 	}
@@ -232,6 +246,15 @@ func TestParse(t *testing.T) {
 				}
 				if got.HasSubshell != want.HasSubshell {
 					t.Errorf("unit[%d] HasSubshell: got %v, want %v", i, got.HasSubshell, want.HasSubshell)
+				}
+				if len(got.Args) != len(want.Args) {
+					t.Errorf("unit[%d] Args: got %v, want %v", i, got.Args, want.Args)
+				} else {
+					for j, arg := range want.Args {
+						if got.Args[j] != arg {
+							t.Errorf("unit[%d] Args[%d]: got %q, want %q", i, j, got.Args[j], arg)
+						}
+					}
 				}
 			}
 		})
@@ -301,5 +324,31 @@ func TestParse_VariableNames(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParse_DepthExceededFallback(t *testing.T) {
+	t.Parallel()
+
+	// With maxDepth=2, the innermost subshell of echo $(echo $(echo $(echo x)))
+	// exceeds the depth limit and must emit a fallback UnitCommand with non-nil Args.
+	result := Parse("echo $(echo $(echo $(echo x)))", "/tmp", 2)
+	if result.ParseError != nil {
+		t.Fatalf("unexpected parse error: %v", result.ParseError)
+	}
+
+	var fallback *CheckableUnit
+	for i := range result.Units {
+		u := &result.Units[i]
+		if u.Kind == UnitCommand && u.Value == "$(...)" && u.HasVariable {
+			fallback = u
+			break
+		}
+	}
+	if fallback == nil {
+		t.Fatalf("no depth-exceeded fallback unit found; units: %+v", result.Units)
+	}
+	if len(fallback.Args) != 1 || fallback.Args[0] != "$(...)" {
+		t.Errorf("fallback Args: got %v, want [\"$(...)\"]", fallback.Args)
 	}
 }

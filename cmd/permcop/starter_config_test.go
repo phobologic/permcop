@@ -41,10 +41,16 @@ path_scope = ["${PROJECT_DIR}"]
 	if err := writeFile(cfgPath, minimalRule); err != nil {
 		t.Fatalf("writeFile: %v", err)
 	}
+	// PROJECT_DIR must be set before validatePatterns so compileScopeEntries
+	// can resolve the ${PROJECT_DIR} variable in path_scope.
 	t.Setenv("PROJECT_DIR", dir)
 
-	if _, err := config.LoadFile(cfgPath); err != nil {
-		t.Errorf("LoadFile rejected uncommented path_scope example: %v", err)
+	cfg, err := config.LoadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadFile rejected uncommented path_scope example: %v", err)
+	}
+	if err := validatePatterns(cfg); err != nil {
+		t.Errorf("validatePatterns rejected uncommented path_scope example: %v", err)
 	}
 }
 

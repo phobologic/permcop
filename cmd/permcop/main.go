@@ -1742,6 +1742,8 @@ subshell_depth_limit = 3
 # name = "Read project source"
 # allow_read = ["./src/**", "./tests/**"]
 # deny_read  = ["./.env"]
+# # path_scope: match only when all path-args resolve within this directory subtree (see README)
+# path_scope = ["${PROJECT_DIR}"]
 
 # [[rules]]
 # name = "Write to tmp only"

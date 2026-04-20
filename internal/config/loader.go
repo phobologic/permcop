@@ -309,7 +309,30 @@ func merge(global, project *Config) *Config {
 	return mergeAll(project, global)
 }
 
+// validateRules checks rule-level constraints that go beyond TOML parsing.
+func validateRules(cfg *Config) error {
+	for i := range cfg.Rules {
+		r := &cfg.Rules[i]
+		name := r.Name
+		if name == "" {
+			name = fmt.Sprintf("rule[%d]", i)
+		}
+		if r.PathScope != nil && len(r.PathScope) == 0 {
+			return fmt.Errorf("rule %q: path_scope must not be empty; omit the field to match any path", name)
+		}
+		for _, entry := range r.PathScope {
+			if strings.TrimSpace(entry) == "" {
+				return fmt.Errorf("rule %q: path_scope contains an empty or whitespace-only entry", name)
+			}
+		}
+	}
+	return nil
+}
+
 func applyDefaults(cfg *Config) error {
+	if err := validateRules(cfg); err != nil {
+		return err
+	}
 	if cfg.Defaults.LogFormat == "" {
 		cfg.Defaults.LogFormat = "text"
 	}

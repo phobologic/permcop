@@ -705,6 +705,137 @@ func TestApplyDefaults_LogFileInsideHome(t *testing.T) {
 	}
 }
 
+func TestLoadFile_PathScope_Present(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "scoped rule"
+path_scope = ["/a", "~/b"]
+allow = ["git status"]
+`)
+
+	cfg, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(cfg.Rules))
+	}
+	got := cfg.Rules[0].PathScope
+	want := []string{"/a", "~/b"}
+	if len(got) != len(want) {
+		t.Fatalf("PathScope: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("PathScope[%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLoadFile_PathScope_Absent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "unscoped rule"
+allow = ["git status"]
+`)
+
+	cfg, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(cfg.Rules))
+	}
+	if cfg.Rules[0].PathScope != nil {
+		t.Errorf("PathScope: got %v, want nil", cfg.Rules[0].PathScope)
+	}
+}
+
+func TestLoadFile_PathScope_EmptyList(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "bad scope"
+path_scope = []
+allow = ["git status"]
+`)
+
+	_, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err == nil {
+		t.Fatal("expected error for empty path_scope, got nil")
+	}
+	if !strings.Contains(err.Error(), "bad scope") {
+		t.Errorf("error should name the offending rule, got: %v", err)
+	}
+}
+
+func TestLoadFile_PathScope_EmptyStringEntry(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "whitespace scope"
+path_scope = ["   "]
+allow = ["git status"]
+`)
+
+	_, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err == nil {
+		t.Fatal("expected error for whitespace-only path_scope entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "whitespace scope") {
+		t.Errorf("error should name the offending rule, got: %v", err)
+	}
+}
+
+func TestLoadFile_PathScope_BlankEntry(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "blank scope"
+path_scope = [""]
+allow = ["git status"]
+`)
+
+	_, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err == nil {
+		t.Fatal("expected error for empty-string path_scope entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "blank scope") {
+		t.Errorf("error should name the offending rule, got: %v", err)
+	}
+}
+
+func TestLoadFile_PathScope_UnnamedRuleError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+path_scope = []
+allow = ["git status"]
+`)
+
+	_, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err == nil {
+		t.Fatal("expected error for empty path_scope on unnamed rule, got nil")
+	}
+	if !strings.Contains(err.Error(), "rule[0]") {
+		t.Errorf("error should use positional name for unnamed rule, got: %v", err)
+	}
+}
+
 func TestPatternUnmarshal_UnknownType(t *testing.T) {
 	t.Parallel()
 

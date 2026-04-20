@@ -727,6 +727,64 @@ func expandVarsNonEmpty(s string, env map[string]string) (string, bool) {
 	return result, true
 }
 
+// pathsInScope reports whether every path-like argument in args is covered by
+// the compiled scope. args is the structured argv (args[0] is the command name
+// and is never evaluated). See the ticket per-yoor for the full algorithm spec.
+func pathsInScope(args []string, scope []string, scopeConfigured bool, cwd, homeDir string) bool {
+	if !scopeConfigured {
+		return true
+	}
+
+	// Collect path candidates from args[1:].
+	var candidates []string
+	for _, tok := range args[1:] {
+		if !strings.HasPrefix(tok, "-") {
+			if strings.Contains(tok, "/") {
+				candidates = append(candidates, tok)
+			}
+		} else if strings.Contains(tok, "=") {
+			// Flag with attached value: -o=/path or --out=/path
+			rhs := tok[strings.IndexByte(tok, '=')+1:]
+			if strings.Contains(rhs, "/") {
+				candidates = append(candidates, rhs)
+			}
+		}
+		// Bare flag (-i, --recursive): not a candidate.
+	}
+
+	if len(candidates) == 0 {
+		return true
+	}
+	if len(scope) == 0 {
+		return false
+	}
+
+	for _, c := range candidates {
+		// Resolve the candidate to an absolute path.
+		if strings.HasPrefix(c, "~/") {
+			if homeDir != "" {
+				c = homeDir + c[1:]
+			}
+		}
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(cwd, c)
+		}
+		c = filepath.Clean(c)
+
+		inScope := false
+		for _, s := range scope {
+			if c == s || s == "/" || strings.HasPrefix(c, s+"/") {
+				inScope = true
+				break
+			}
+		}
+		if !inScope {
+			return false
+		}
+	}
+	return true
+}
+
 // unitHasSudo reports whether a single parsed command unit invokes sudo.
 // The value is the AST-reconstructed command string for one unit (e.g. "sudo git status"),
 // so a simple prefix check here is correct — the AST has already handled quoting, chaining,

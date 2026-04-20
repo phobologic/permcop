@@ -452,7 +452,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				continue
 			}
 
-			if ok, pat := unitCoveredByRule(cr, u); ok {
+			if ok, pat := unitCoveredByRule(cr, u, cwd, e.homeDir); ok {
 				lastUnit = orig
 				lastPat = pat
 				lastRule = cr.rule.Name
@@ -551,7 +551,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind, cwd string) (*Resu
 	// Pass 2: Allow scan (file-only rules can cover a single file unit)
 	for i := range e.compiledRules {
 		cr := e.compiledRules[i]
-		if covered, pat := unitCoveredByRule(cr, unit); covered {
+		if covered, pat := unitCoveredByRule(cr, unit, cwd, e.homeDir); covered {
 			entry.RuleMatches = []audit.RuleMatch{{
 				Rule:    cr.rule.Name,
 				Pattern: pat,
@@ -655,7 +655,7 @@ func flagTokenMatches(token, flag string) bool {
 	return false
 }
 
-func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit) (bool, string) {
+func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit, cwd, homeDir string) (bool, string) {
 	switch u.Kind {
 	case parser.UnitCommand:
 		for _, cp := range cr.allow {
@@ -663,6 +663,9 @@ func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit) (bool, string) {
 				// escalate_flags: if any listed flag is present, this pattern
 				// abstains — the unit is not covered and falls through to Claude Code.
 				if escalateFlagPresent(cp.p.EscalateFlags, u.Value) {
+					continue
+				}
+				if !pathsInScope(u.Args, cr.scope, cr.scopeConfigured, cwd, homeDir) {
 					continue
 				}
 				return true, patternString(cp.p)

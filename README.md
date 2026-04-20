@@ -212,6 +212,33 @@ allow = [{ type = "prefix", pattern = "sed" }]
 
 `strip_command_path` defaults to `false` to preserve backward compatibility. `deny_flags` command matching always uses the basename regardless of this setting.
 
+### Path scope
+
+`path_scope` limits a rule to commands that operate within a bounded directory subtree. When `path_scope` is set, the rule only covers a command unit if at least one of the command's path-like arguments falls inside one of the listed directories (the directory itself or any nested subdirectory, recursively).
+
+```toml
+[[rules]]
+name            = "Allow edits inside project"
+expand_variables = true
+path_scope      = ["${PROJECT_DIR}"]
+allow = [
+  { type = "prefix", pattern = "sed" },
+  { type = "prefix", pattern = "patch" },
+]
+```
+
+With this rule, `sed -i 's/foo/bar/' ${PROJECT_DIR}/src/main.go` is covered; `sed -i 's/foo/bar/' /etc/hosts` is not — the path `/etc/hosts` is outside `${PROJECT_DIR}`.
+
+**Synergy with Claude Code's sandbox.** permcop handles ergonomic approval — letting specific commands run without a prompt — while Claude Code's sandbox handles actual filesystem enforcement at the OS level. `path_scope` is a policy expression, not a security boundary.
+
+**Semantics:**
+
+- Scope is **lexical** — it does not follow symlinks. A symlink inside `${PROJECT_DIR}` that points outside the tree is still treated as inside scope; a path that resolves to a location inside the tree via a symlink outside it is not.
+- Path detection uses a **strict `/`-only heuristic** applied to argv positions ≥ 1. Tokens that begin with `/` are treated as absolute paths. `--flag=/path/value` RHS values (after the `=`) are also extracted and checked.
+- **Variable-bearing argv tokens** (e.g. `${PROJECT_DIR}/src/main.go`) require the rule to set `expand_variables = true`. `path_scope` does not expand variables in argv itself — if the token still contains a `$` after rule-level expansion, it will not match any scope entry.
+
+**Fail-closed variable expansion.** If a scope entry contains a variable (e.g. `${PROJECT_DIR}`) and that variable is missing or empty in the environment, the entry is silently dropped. A fully-dropped `path_scope` (all entries removed due to missing/empty variables) vacuously covers commands that have no path candidates — commands with no `/`-prefixed arguments or `--flag=/…` tokens. This means configuring `path_scope` with all-missing variables silently widens coverage for path-less commands. Set variables in the environment before running permcop, or validate your config with `permcop validate` to catch this.
+
 ### Per-unit coverage
 
 Each parsed unit is evaluated independently against all rules. A chain like `echo hi > /tmp/out.txt` produces two units: the `echo` command and the `/tmp/out.txt` write. Each unit finds any rule that covers it — they don't need to be in the same rule.

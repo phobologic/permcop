@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -361,11 +362,16 @@ func runExplain(command string) {
 		return
 	}
 
-	fmt.Printf("Command:  %s\n", command)
-	fmt.Printf("Units:    ")
+	writeExplainResult(os.Stdout, command, result)
+}
+
+// writeExplainResult formats a rule evaluation result for human-readable display.
+func writeExplainResult(w io.Writer, command string, result *rules.Result) {
+	fmt.Fprintf(w, "Command:  %s\n", command)
+	fmt.Fprintf(w, "Units:    ")
 	for i, u := range result.Units {
 		if i > 0 {
-			fmt.Print(", ")
+			fmt.Fprint(w, ", ")
 		}
 		flags := ""
 		if u.HasVariable {
@@ -374,46 +380,46 @@ func runExplain(command string) {
 		if u.HasSubshell {
 			flags += "[subshell]"
 		}
-		fmt.Printf("[%s %s%s]", u.Kind, u.Value, flags)
+		fmt.Fprintf(w, "[%s %s%s]", u.Kind, u.Value, flags)
 	}
-	fmt.Println()
-	fmt.Println()
+	fmt.Fprintln(w)
+	fmt.Fprintln(w)
 
 	switch {
 	case result.Allowed:
-		fmt.Printf("Result:   ALLOW\n")
+		fmt.Fprintf(w, "Result:   ALLOW\n")
 		if result.DecidingRule != "" {
-			fmt.Printf("Rule:     %q\n", result.DecidingRule)
+			fmt.Fprintf(w, "Rule:     %q\n", result.DecidingRule)
 		}
 		if result.DecidingPattern != "" {
-			fmt.Printf("Pattern:  %s\n", result.DecidingPattern)
+			fmt.Fprintf(w, "Pattern:  %s\n", result.DecidingPattern)
 		}
 		if result.DecidingUnit != nil {
-			fmt.Printf("Hit unit: %s\n", result.DecidingUnit.Value)
+			fmt.Fprintf(w, "Hit unit: %s\n", result.DecidingUnit.Value)
 		}
 		if result.Reason != "" {
-			fmt.Printf("Warning:  %s\n", result.Reason)
+			fmt.Fprintf(w, "Warning:  %s\n", result.Reason)
 		}
 	case result.FallThrough:
-		fmt.Printf("Result:   PASS (no matching rule — deferred to Claude Code)\n")
+		fmt.Fprintf(w, "Result:   PASS (no matching rule — deferred to Claude Code)\n")
 		for _, m := range result.RuleMatches {
 			for _, sk := range m.SkippedRules {
-				fmt.Printf("          skipped: rule=%q — %s\n", sk.Rule, sk.Reason)
+				fmt.Fprintf(w, "          skipped: rule=%q — %s\n", sk.Rule, sk.Reason)
 			}
 		}
 	default:
-		fmt.Printf("Result:   DENY\n")
+		fmt.Fprintf(w, "Result:   DENY\n")
 		if result.Reason != "" {
-			fmt.Printf("Reason:   %s\n", result.Reason)
+			fmt.Fprintf(w, "Reason:   %s\n", result.Reason)
 		}
 		if result.DecidingRule != "" {
-			fmt.Printf("Rule:     %q\n", result.DecidingRule)
+			fmt.Fprintf(w, "Rule:     %q\n", result.DecidingRule)
 		}
 		if result.DecidingPattern != "" {
-			fmt.Printf("Pattern:  %s\n", result.DecidingPattern)
+			fmt.Fprintf(w, "Pattern:  %s\n", result.DecidingPattern)
 		}
 		if result.DecidingUnit != nil {
-			fmt.Printf("Hit unit: %s\n", result.DecidingUnit.Value)
+			fmt.Fprintf(w, "Hit unit: %s\n", result.DecidingUnit.Value)
 		}
 	}
 }

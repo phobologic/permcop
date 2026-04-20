@@ -31,6 +31,7 @@ make cover      # coverage report → coverage.html
 - **Per-unit coverage** — each unit in a command independently finds any rule that covers it; different units can be covered by different rules. A "write zone" rule can cover write units across many command rules.
 - **Shell parsing** — use `mvdan.cc/sh/v3` for AST parsing, never regex-split commands.
 - **`expand_variables`** — per-rule opt-in; resolves `$VAR`/`${VAR}` from env before matching. Fail-closed: if any variable is missing from env, that rule cannot cover the unit. `CheckableUnit.Variables []string` tracks variable names found (without `$`).
+- **`path_scope`** — match only when all path-args resolve within this directory subtree (see README).
 
 ## Config locations
 

@@ -1320,7 +1320,7 @@ func TestPathsInScope(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := pathsInScope(tc.args, tc.scope, tc.scopeConfigured, tc.cwd, tc.homeDir)
+			got, _ := pathsInScope(tc.args, tc.scope, tc.scopeConfigured, tc.cwd, tc.homeDir)
 			if got != tc.want {
 				t.Errorf("pathsInScope(%v, scope=%v, configured=%v, cwd=%q, home=%q) = %v, want %v",
 					tc.args, tc.scope, tc.scopeConfigured, tc.cwd, tc.homeDir, got, tc.want)
@@ -1708,14 +1708,25 @@ func TestEngine_PathScope(t *testing.T) {
 		// $HOME/foo is treated as a literal token; it contains "/" so it is a path
 		// candidate. With cwd=/home/user it resolves to /home/user/$HOME/foo — not
 		// under /proj — so pathsInScope returns false and the rule abstains.
-		// TODO(per-ivhv): assert a path_scope SkippedRule once that recording is added.
 		r, err := e.Check("cat $HOME/foo", "/home/user")
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertFallThrough(t, r, "unexpanded var in argv: rule abstains")
-		if dm := lastDenyMatch(r.RuleMatches); dm == nil {
-			t.Errorf("expected a deny RuleMatch for fall-through; got %v", r.RuleMatches)
+		dm := lastDenyMatch(r.RuleMatches)
+		if dm == nil {
+			t.Fatalf("expected a deny RuleMatch for fall-through; got %v", r.RuleMatches)
+		}
+		if len(dm.SkippedRules) == 0 {
+			t.Fatal("expected SkippedRules to be populated for path_scope abstention, got none")
+		}
+		sk := dm.SkippedRules[0]
+		if sk.Rule != "cat-proj" {
+			t.Errorf("skipped rule: got %q, want %q", sk.Rule, "cat-proj")
+		}
+		const wantReason = "path_scope: /home/user/$HOME/foo not under any scope entry"
+		if sk.Reason != wantReason {
+			t.Errorf("skipped reason: got %q, want %q", sk.Reason, wantReason)
 		}
 	})
 
@@ -1776,6 +1787,139 @@ func TestEngine_PathScope(t *testing.T) {
 		assertAllowed(t, r, "-o=/proj/file RHS in-scope")
 		if !hasAllowMatch(r.RuleMatches, "r") {
 			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
+	})
+}
+
+func TestEngine_PathScope_SkippedRules(t *testing.T) {
+	t.Parallel()
+
+	lastDenyMatch := func(matches []audit.RuleMatch) *audit.RuleMatch {
+		for i := len(matches) - 1; i >= 0; i-- {
+			if matches[i].Action == "deny" {
+				return &matches[i]
+			}
+		}
+		return nil
+	}
+
+	// Out-of-scope: SkippedRule recorded with correct reason and resolved path.
+	t.Run("out_of_scope_records_skipped_rule", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:      "cp-proj",
+			Allow:     []config.Pattern{{Type: config.PatternPrefix, Pattern: "cp"}},
+			PathScope: []string{"/proj"},
+		}
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{})
+		r, err := e.Check("cp /etc/passwd /proj/dest", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.FallThrough {
+			t.Fatalf("expected FallThrough, got Allowed=%v", r.Allowed)
+		}
+		dm := lastDenyMatch(r.RuleMatches)
+		if dm == nil {
+			t.Fatalf("no deny RuleMatch found; got %v", r.RuleMatches)
+		}
+		if len(dm.SkippedRules) == 0 {
+			t.Fatal("expected SkippedRules for path_scope abstention, got none")
+		}
+		sk := dm.SkippedRules[0]
+		if sk.Rule != "cp-proj" {
+			t.Errorf("skipped rule: got %q, want %q", sk.Rule, "cp-proj")
+		}
+		const wantReason = "path_scope: /etc/passwd not under any scope entry"
+		if sk.Reason != wantReason {
+			t.Errorf("skipped reason: got %q, want %q", sk.Reason, wantReason)
+		}
+	})
+
+	// In-scope: no path_scope SkippedRule emitted.
+	t.Run("in_scope_no_skipped_rule", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:      "cp-proj",
+			Allow:     []config.Pattern{{Type: config.PatternPrefix, Pattern: "cp"}},
+			PathScope: []string{"/proj"},
+		}
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{})
+		r, err := e.Check("cp /proj/src /proj/dest", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Allowed {
+			t.Fatalf("expected Allowed, got FallThrough=%v", r.FallThrough)
+		}
+		for _, m := range r.RuleMatches {
+			for _, sk := range m.SkippedRules {
+				if strings.HasPrefix(sk.Reason, "path_scope:") {
+					t.Errorf("unexpected path_scope SkippedRule on allow: %+v", sk)
+				}
+			}
+		}
+	})
+
+	// escalate_flags fires before path_scope: no path_scope SkippedRule emitted.
+	t.Run("escalate_before_path_scope_no_path_scope_skipped_rule", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name: "cp-proj",
+			Allow: []config.Pattern{{
+				Type:          config.PatternPrefix,
+				Pattern:       "cp",
+				EscalateFlags: []string{"--force"},
+			}},
+			PathScope: []string{"/proj"},
+		}
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{})
+		// --force fires escalate; /etc/passwd would also fail path_scope.
+		r, err := e.Check("cp --force /etc/passwd /proj/dest", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.FallThrough {
+			t.Fatalf("expected FallThrough from escalate, got Allowed=%v", r.Allowed)
+		}
+		dm := lastDenyMatch(r.RuleMatches)
+		if dm == nil {
+			t.Fatalf("no deny RuleMatch; got %v", r.RuleMatches)
+		}
+		for _, sk := range dm.SkippedRules {
+			if strings.HasPrefix(sk.Reason, "path_scope:") {
+				t.Errorf("path_scope SkippedRule emitted when escalate fired first: %+v", sk)
+			}
+		}
+	})
+
+	// Relative path resolved against cwd appears in reason string.
+	t.Run("relative_path_resolved_in_reason", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:      "ls-proj",
+			Allow:     []config.Pattern{{Type: config.PatternPrefix, Pattern: "ls"}},
+			PathScope: []string{"/proj"},
+		}
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{})
+		// "other/dir" is relative; with cwd=/home/user it resolves to /home/user/other/dir.
+		r, err := e.Check("ls other/dir", "/home/user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.FallThrough {
+			t.Fatalf("expected FallThrough, got Allowed=%v", r.Allowed)
+		}
+		dm := lastDenyMatch(r.RuleMatches)
+		if dm == nil {
+			t.Fatalf("no deny RuleMatch; got %v", r.RuleMatches)
+		}
+		if len(dm.SkippedRules) == 0 {
+			t.Fatal("expected SkippedRules for path_scope abstention, got none")
+		}
+		const wantReason = "path_scope: /home/user/other/dir not under any scope entry"
+		if dm.SkippedRules[0].Reason != wantReason {
+			t.Errorf("reason: got %q, want %q", dm.SkippedRules[0].Reason, wantReason)
 		}
 	})
 }

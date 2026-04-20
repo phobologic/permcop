@@ -1178,3 +1178,153 @@ func TestCompileScopeEntries(t *testing.T) {
 		})
 	}
 }
+
+func TestPathsInScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		args            []string
+		scope           []string
+		scopeConfigured bool
+		cwd             string
+		homeDir         string
+		want            bool
+	}{
+		{
+			name:            "scopeConfigured false: always true",
+			args:            []string{"rm", "/etc/passwd"},
+			scope:           nil,
+			scopeConfigured: false,
+			want:            true,
+		},
+		{
+			name:            "no candidates: vacuous true",
+			args:            []string{"git", "status"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            true,
+		},
+		{
+			name:            "scope empty, no candidates: true",
+			args:            []string{"git", "status"},
+			scope:           nil,
+			scopeConfigured: true,
+			want:            true,
+		},
+		{
+			name:            "scope empty, candidate present: false",
+			args:            []string{"cp", "/src/file", "/dst/file"},
+			scope:           nil,
+			scopeConfigured: true,
+			want:            false,
+		},
+		{
+			name:            "all candidates in-scope: true",
+			args:            []string{"cp", "/proj/a", "/proj/b"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			cwd:             "/proj",
+			want:            true,
+		},
+		{
+			name:            "one candidate out-of-scope: false",
+			args:            []string{"cp", "/proj/a", "/etc/passwd"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            false,
+		},
+		{
+			name:            "relative path resolved via cwd: in-scope",
+			args:            []string{"cat", "./file"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			cwd:             "/proj/src",
+			want:            true,
+		},
+		{
+			name:            "exact scope match",
+			args:            []string{"ls", "/proj"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            true,
+		},
+		{
+			name:            "prefix collision: /project-other not matched by /proj scope",
+			args:            []string{"cat", "/project-other/file"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            false,
+		},
+		{
+			name:            "scope entry /: any absolute candidate in-scope",
+			args:            []string{"cat", "/anything/at/all"},
+			scope:           []string{"/"},
+			scopeConfigured: true,
+			want:            true,
+		},
+		{
+			name:            "flag --out=/etc/passwd: RHS extracted, out-of-scope",
+			args:            []string{"tool", "--out=/etc/passwd"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            false,
+		},
+		{
+			name:            "flag -o=/proj/file: RHS in-scope",
+			args:            []string{"tool", "-o=/proj/file"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            true,
+		},
+		{
+			name:            "bare flag -i: not a candidate",
+			args:            []string{"sed", "-i"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            true, // -i is a bare flag with no "=", not a candidate; no candidates → vacuous true
+		},
+		{
+			name:            "bare flag --recursive: not a candidate",
+			args:            []string{"rsync", "--recursive"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            true,
+		},
+		{
+			name:            "token with unexpanded variable: treated as literal",
+			args:            []string{"cat", "$HOME/foo"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			cwd:             "/other", // resolves to /other/$HOME/foo — not under /proj
+			want:            false,
+		},
+		{
+			name:            "args[0] never a candidate even if it contains /",
+			args:            []string{"/usr/bin/cat", "/proj/file"},
+			scope:           []string{"/proj"},
+			scopeConfigured: true,
+			want:            true, // only /proj/file is evaluated
+		},
+		{
+			name:            "tilde in arg expanded via homeDir",
+			args:            []string{"cat", "~/proj/file"},
+			scope:           []string{"/home/x/proj"},
+			scopeConfigured: true,
+			homeDir:         "/home/x",
+			want:            true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := pathsInScope(tc.args, tc.scope, tc.scopeConfigured, tc.cwd, tc.homeDir)
+			if got != tc.want {
+				t.Errorf("pathsInScope(%v, scope=%v, configured=%v, cwd=%q, home=%q) = %v, want %v",
+					tc.args, tc.scope, tc.scopeConfigured, tc.cwd, tc.homeDir, got, tc.want)
+			}
+		})
+	}
+}

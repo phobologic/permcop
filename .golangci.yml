@@ -16,7 +16,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/mikecafarella/permcop
+        - github.com/phobologic/permcop
 
 issues:
   max-issues-per-linter: 0

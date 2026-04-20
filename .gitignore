@@ -8,3 +8,5 @@ coverage.html
 .code-review/
 .permcop.local.toml
 .worktrees/
+.tmp/
+.DS_Store

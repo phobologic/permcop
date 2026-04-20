@@ -178,7 +178,7 @@ func compileScopeEntries(pathScope []string, homeDir string, env map[string]stri
 		// expandVarsNonEmpty treats empty-valued variables as unresolved so that
 		// compound paths like "/prefix/${DIR}/suffix" with DIR="" are dropped
 		// rather than silently broadened by filepath.Clean.
-		if strings.ContainsAny(entry, "$") {
+		if strings.Contains(entry, "$") {
 			expanded, ok := expandVarsNonEmpty(entry, env)
 			if !ok {
 				continue

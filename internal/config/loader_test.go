@@ -777,7 +777,7 @@ allow = ["git status"]
 	}
 }
 
-func TestLoadFile_PathScope_EmptyStringEntry(t *testing.T) {
+func TestLoadFile_PathScope_WhitespaceOnlyEntry(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -797,7 +797,7 @@ allow = ["git status"]
 	}
 }
 
-func TestLoadFile_PathScope_BlankEntry(t *testing.T) {
+func TestLoadFile_PathScope_EmptyStringEntry(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()

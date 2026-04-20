@@ -434,6 +434,16 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				}
 				u.Value = expanded
 				u.HasVariable = false
+				// Expand Args so pathsInScope sees resolved tokens, not literal $VAR.
+				expandedArgs := make([]string, len(u.Args))
+				for i, arg := range u.Args {
+					if ea, ok2 := expandVars(arg, e.env); ok2 {
+						expandedArgs[i] = ea
+					} else {
+						expandedArgs[i] = arg
+					}
+				}
+				u.Args = expandedArgs
 			}
 
 			// Strip command path for pattern matching.

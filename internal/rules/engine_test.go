@@ -1328,3 +1328,38 @@ func TestPathsInScope(t *testing.T) {
 		})
 	}
 }
+
+func TestEngine_PathScope_ExpandVariables(t *testing.T) {
+	t.Parallel()
+
+	rule := config.Rule{
+		Name:            "proj writes",
+		Allow:           []config.Pattern{{Type: config.PatternPrefix, Pattern: "cp"}},
+		ExpandVariables: true,
+		PathScope:       []string{"/proj"},
+	}
+
+	t.Run("DIR=/proj: expanded arg in-scope, allow", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{"DIR": "/proj"})
+		r, err := e.Check("cp $DIR/file /proj/out", "/proj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Allowed {
+			t.Errorf("expected ALLOW, got DENY: %s", r.Reason)
+		}
+	})
+
+	t.Run("DIR=/other: expanded arg out-of-scope, deny", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{"DIR": "/other"})
+		r, err := e.Check("cp $DIR/file /proj/out", "/proj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Allowed {
+			t.Errorf("expected DENY (out-of-scope arg), got ALLOW")
+		}
+	})
+}

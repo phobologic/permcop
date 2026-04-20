@@ -24,6 +24,7 @@ type CheckableUnit struct {
 	// For UnitCommand: the full command string (e.g., "git push origin main")
 	// For UnitReadFile/UnitWriteFile: the file path
 	Value       string
+	Args        []string // For UnitCommand: per-argument strings with quoting removed; nil for file units
 	HasVariable bool     // true if any $VAR or ${VAR} was found in the value
 	Variables   []string // names of variables found (without $), e.g. ["TARGET", "HOME"]
 	HasSubshell bool     // true if any $(...) or backtick subshell was found
@@ -91,6 +92,7 @@ func (v *visitor) handleCallExpr(n *syntax.CallExpr) {
 		unit := CheckableUnit{
 			Kind:        UnitCommand,
 			Value:       strings.Join(parts, " "),
+			Args:        parts,
 			HasVariable: combined.hasVariable,
 			Variables:   combined.variables,
 			HasSubshell: combined.hasSubshell,

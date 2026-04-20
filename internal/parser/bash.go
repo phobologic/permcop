@@ -162,6 +162,7 @@ func (v *visitor) walkSubshellsInWord(word *syntax.Word, depth int) {
 		v.units = append(v.units, CheckableUnit{
 			Kind:        UnitCommand,
 			Value:       "$(...)",
+			Args:        []string{"$(...)"},
 			HasVariable: true,
 		})
 		return

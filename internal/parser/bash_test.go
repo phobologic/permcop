@@ -326,3 +326,29 @@ func TestParse_VariableNames(t *testing.T) {
 		})
 	}
 }
+
+func TestParse_DepthExceededFallback(t *testing.T) {
+	t.Parallel()
+
+	// With maxDepth=2, the innermost subshell of echo $(echo $(echo $(echo x)))
+	// exceeds the depth limit and must emit a fallback UnitCommand with non-nil Args.
+	result := Parse("echo $(echo $(echo $(echo x)))", "/tmp", 2)
+	if result.ParseError != nil {
+		t.Fatalf("unexpected parse error: %v", result.ParseError)
+	}
+
+	var fallback *CheckableUnit
+	for i := range result.Units {
+		u := &result.Units[i]
+		if u.Kind == UnitCommand && u.Value == "$(...)" && u.HasVariable {
+			fallback = u
+			break
+		}
+	}
+	if fallback == nil {
+		t.Fatalf("no depth-exceeded fallback unit found; units: %+v", result.Units)
+	}
+	if len(fallback.Args) != 1 || fallback.Args[0] != "$(...)" {
+		t.Errorf("fallback Args: got %v, want [\"$(...)\"]", fallback.Args)
+	}
+}

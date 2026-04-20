@@ -462,7 +462,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				continue
 			}
 
-			if ok, pat := unitCoveredByRule(cr, u, cwd, e.homeDir); ok {
+			if ok, pat, ruleSkipped := unitCoveredByRule(cr, u, cwd, e.homeDir); ok {
 				lastUnit = orig
 				lastPat = pat
 				lastRule = cr.rule.Name
@@ -477,6 +477,8 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 					warnReason = "variable in command (unknown_variable_action=warn)"
 				}
 				break
+			} else {
+				skippedRules = append(skippedRules, ruleSkipped...)
 			}
 		}
 
@@ -561,7 +563,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind, cwd string) (*Resu
 	// Pass 2: Allow scan (file-only rules can cover a single file unit)
 	for i := range e.compiledRules {
 		cr := e.compiledRules[i]
-		if covered, pat := unitCoveredByRule(cr, unit, cwd, e.homeDir); covered {
+		if covered, pat, _ := unitCoveredByRule(cr, unit, cwd, e.homeDir); covered {
 			entry.RuleMatches = []audit.RuleMatch{{
 				Rule:    cr.rule.Name,
 				Pattern: pat,
@@ -665,9 +667,10 @@ func flagTokenMatches(token, flag string) bool {
 	return false
 }
 
-func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit, cwd, homeDir string) (bool, string) {
+func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit, cwd, homeDir string) (bool, string, []audit.SkippedRule) {
 	switch u.Kind {
 	case parser.UnitCommand:
+		var skipped []audit.SkippedRule
 		for _, cp := range cr.allow {
 			if cp.match(u.Value) {
 				// escalate_flags: if any listed flag is present, this pattern
@@ -675,26 +678,31 @@ func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit, cwd, homeDir str
 				if escalateFlagPresent(cp.p.EscalateFlags, u.Value) {
 					continue
 				}
-				if !pathsInScope(u.Args, cr.scope, cr.scopeConfigured, cwd, homeDir) {
+				if ok, failingPath := pathsInScope(u.Args, cr.scope, cr.scopeConfigured, cwd, homeDir); !ok {
+					skipped = append(skipped, audit.SkippedRule{
+						Rule:   cr.rule.Name,
+						Reason: "path_scope: " + failingPath + " not under any scope entry",
+					})
 					continue
 				}
-				return true, patternString(cp.p)
+				return true, patternString(cp.p), nil
 			}
 		}
+		return false, "", skipped
 	case parser.UnitReadFile:
 		for _, gp := range cr.allowRead {
 			if gp.match(u.Value) {
-				return true, "allow_read:" + gp.raw
+				return true, "allow_read:" + gp.raw, nil
 			}
 		}
 	case parser.UnitWriteFile:
 		for _, gp := range cr.allowWrite {
 			if gp.match(u.Value) {
-				return true, "allow_write:" + gp.raw
+				return true, "allow_write:" + gp.raw, nil
 			}
 		}
 	}
-	return false, ""
+	return false, "", nil
 }
 
 func patternString(p config.Pattern) string {
@@ -743,9 +751,10 @@ func expandVarsNonEmpty(s string, env map[string]string) (string, bool) {
 // pathsInScope reports whether every path-like argument in args is covered by
 // the compiled scope. args is the structured argv (args[0] is the command name
 // and is never evaluated). See the ticket per-yoor for the full algorithm spec.
-func pathsInScope(args []string, scope []string, scopeConfigured bool, cwd, homeDir string) bool {
+// On failure, returns the resolved absolute path of the first out-of-scope candidate.
+func pathsInScope(args []string, scope []string, scopeConfigured bool, cwd, homeDir string) (bool, string) {
 	if !scopeConfigured {
-		return true
+		return true, ""
 	}
 
 	// Collect path candidates from args[1:].
@@ -766,10 +775,18 @@ func pathsInScope(args []string, scope []string, scopeConfigured bool, cwd, home
 	}
 
 	if len(candidates) == 0 {
-		return true
+		return true, ""
 	}
 	if len(scope) == 0 {
-		return false
+		// First candidate is the failing path; resolve it before returning.
+		c := candidates[0]
+		if strings.HasPrefix(c, "~/") && homeDir != "" {
+			c = homeDir + c[1:]
+		}
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(cwd, c)
+		}
+		return false, filepath.Clean(c)
 	}
 
 	for _, c := range candidates {
@@ -792,10 +809,10 @@ func pathsInScope(args []string, scope []string, scopeConfigured bool, cwd, home
 			}
 		}
 		if !inScope {
-			return false
+			return false, c
 		}
 	}
-	return true
+	return true, ""
 }
 
 // unitHasSudo reports whether a single parsed command unit invokes sudo.

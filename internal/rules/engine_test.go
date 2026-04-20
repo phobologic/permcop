@@ -1363,3 +1363,365 @@ func TestEngine_PathScope_ExpandVariables(t *testing.T) {
 		}
 	})
 }
+
+// TestEngine_PathScope covers all 20 path_scope integration scenarios.
+func TestEngine_PathScope(t *testing.T) {
+	t.Parallel()
+
+	// allowRule builds a simple prefix-allow rule with the given path_scope.
+	allowRule := func(name, prefix string, scope []string) config.Rule {
+		return config.Rule{
+			Name:      name,
+			Allow:     []config.Pattern{{Type: config.PatternPrefix, Pattern: prefix}},
+			PathScope: scope,
+		}
+	}
+
+	// assertAllowed checks that the result is an allow decision.
+	assertAllowed := func(t *testing.T, r *Result, label string) {
+		t.Helper()
+		if !r.Allowed {
+			t.Errorf("%s: expected Allowed=true, got Allowed=false FallThrough=%v Reason=%q", label, r.FallThrough, r.Reason)
+		}
+	}
+
+	// assertFallThrough checks that the result is a pass-through (no rule covered).
+	assertFallThrough := func(t *testing.T, r *Result, label string) {
+		t.Helper()
+		if !r.FallThrough {
+			t.Errorf("%s: expected FallThrough=true, got Allowed=%v FallThrough=false", label, r.Allowed)
+		}
+	}
+
+	// lastDenyMatch returns the last RuleMatch with action "deny" (the fall-through record).
+	lastDenyMatch := func(matches []audit.RuleMatch) *audit.RuleMatch {
+		for i := len(matches) - 1; i >= 0; i-- {
+			if matches[i].Action == "deny" {
+				return &matches[i]
+			}
+		}
+		return nil
+	}
+
+	// hasAllowMatch returns true if any RuleMatch has action "allow" for the given rule.
+	hasAllowMatch := func(matches []audit.RuleMatch, ruleName string) bool {
+		for _, m := range matches {
+			if m.Action == "allow" && m.Rule == ruleName {
+				return true
+			}
+		}
+		return false
+	}
+
+	// --- Scenario 1: in-scope absolute path ---
+	t.Run("1_in_scope_absolute", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "cp", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("cp /proj/a /proj/b", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "in-scope absolute")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r', got %v", r.RuleMatches)
+		}
+	})
+
+	// --- Scenario 2: out-of-scope absolute path ---
+	t.Run("2_out_of_scope_absolute", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "cp", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("cp /etc/passwd /proj/b", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFallThrough(t, r, "out-of-scope absolute")
+		if dm := lastDenyMatch(r.RuleMatches); dm == nil {
+			t.Errorf("expected a deny RuleMatch for fall-through; got %v", r.RuleMatches)
+		}
+	})
+
+	// --- Scenario 3: relative path resolved via cwd ---
+	t.Run("3_relative_path_resolved_via_cwd", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "cp", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("cp ./file /proj/out", "/proj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "relative resolved via cwd")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
+	})
+
+	// --- Scenario 4: ~/ expansion in scope entry ---
+	t.Run("4_tilde_expansion_in_scope_entry", func(t *testing.T) {
+		t.Parallel()
+		homeDir, err := os.UserHomeDir()
+		if err != nil || homeDir == "" {
+			t.Skip("no home dir available")
+		}
+		// Scope entry "~/testpermcop" compiles to homeDir+"/testpermcop".
+		// Command arg "~/testpermcop/file" expands to homeDir+"/testpermcop/file" in pathsInScope.
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "ls", []string{"~/testpermcop"})}, nil, map[string]string{})
+		r, err := e.Check("ls ~/testpermcop/file", homeDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "tilde expansion in scope entry")
+	})
+
+	// --- Scenario 5: ${VAR} expansion in scope entry ---
+	t.Run("5_var_expansion_in_scope_entry", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "ls", []string{"${DIR}"})}, nil, map[string]string{"DIR": "/proj"})
+		r, err := e.Check("ls /proj/file", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "var expansion in scope entry")
+	})
+
+	// --- Scenario 6: ${VAR} unset — entry dropped, other entries still usable ---
+	t.Run("6_var_unset_other_entry_still_usable", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "ls", []string{"${UNSET_XYZ}", "/proj"})}, nil, map[string]string{})
+		r, err := e.Check("ls /proj/file", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// ${UNSET_XYZ} is dropped but /proj survives; /proj/file is in-scope.
+		assertAllowed(t, r, "unset var entry dropped, other survives")
+	})
+
+	// --- Scenario 7: ${VAR}="" — entry dropped ---
+	t.Run("7_var_empty_entry_dropped", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "ls", []string{"${DIR}"})}, nil, map[string]string{"DIR": ""})
+		r, err := e.Check("ls /proj/file", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Scope is empty after dropping the entry; candidate present → abstain.
+		assertFallThrough(t, r, "empty var entry dropped, scope empty")
+	})
+
+	// --- Scenario 8: all scope entries dropped — abstains with candidates, covers without ---
+	t.Run("8_all_entries_dropped", func(t *testing.T) {
+		t.Parallel()
+		rule := allowRule("r", "cp", []string{"${GONE_XYZ}"})
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{})
+
+		// With path candidate: scope empty + candidate → abstain.
+		r1, err := e.Check("cp /etc/file", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFallThrough(t, r1, "all-dropped scope with candidate")
+
+		// Without path candidates: vacuous pass → allow.
+		r2, err := e.Check("cp -r", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r2, "all-dropped scope without candidates")
+	})
+
+	// --- Scenario 9: nonexistent resolved path works lexically ---
+	t.Run("9_nonexistent_path_lexical", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "ls", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("ls /proj/does_not_exist_xyz_abc", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "nonexistent path lexically in-scope")
+	})
+
+	// --- Scenario 10: multiple path args, all in-scope ---
+	t.Run("10_multiple_args_all_in_scope", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "cp", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("cp /proj/a /proj/b", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "all path args in-scope")
+	})
+
+	// --- Scenario 11: multiple path args, one out-of-scope ---
+	t.Run("11_multiple_args_one_out_of_scope", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "cp", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("cp /proj/a /etc/passwd", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFallThrough(t, r, "one path arg out-of-scope")
+	})
+
+	// --- Scenario 12: no path candidates — vacuous pass ---
+	t.Run("12_no_path_candidates_vacuous_pass", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "git", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("git status", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "no path candidates: vacuous pass")
+		if !hasAllowMatch(r.RuleMatches, "r") {
+			t.Errorf("expected allow RuleMatch from rule 'r'")
+		}
+	})
+
+	// --- Scenario 13: root scope "/" — any absolute path in-scope ---
+	t.Run("13_root_scope", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "ls", []string{"/"})}, nil, map[string]string{})
+		r, err := e.Check("ls /anything/at/all", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "root scope covers any absolute path")
+	})
+
+	// --- Scenario 14: escalate_flags checked before path_scope ---
+	t.Run("14_escalate_flags_before_path_scope", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name: "r",
+			Allow: []config.Pattern{{
+				Type:          config.PatternPrefix,
+				Pattern:       "cp",
+				EscalateFlags: []string{"--force"},
+			}},
+			PathScope: []string{"/proj"},
+		}
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{})
+
+		// --force present AND /proj/file in-scope: escalate fires first → falls through.
+		r1, err := e.Check("cp --force /proj/file", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFallThrough(t, r1, "escalate fires before path_scope check")
+
+		// No --force, in-scope: escalate doesn't fire, path_scope passes → allow.
+		r2, err := e.Check("cp /proj/file", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r2, "no escalate flag, in-scope: allowed")
+
+		// No --force, out-of-scope: escalate doesn't fire, path_scope abstains → fall-through.
+		r3, err := e.Check("cp /etc/passwd", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFallThrough(t, r3, "no escalate flag, out-of-scope: fall-through")
+	})
+
+	// --- Scenario 15: deny in Pass 1 beats allow with path_scope in Pass 2 ---
+	t.Run("15_deny_pass1_beats_path_scope_allow", func(t *testing.T) {
+		t.Parallel()
+		rules := []config.Rule{
+			{
+				Name: "blocker",
+				Deny: []config.Pattern{{Type: config.PatternPrefix, Pattern: "rm"}},
+			},
+			allowRule("permitter", "rm", []string{"/proj"}),
+		}
+		e := newTestEngineWithEnv(t, rules, nil, map[string]string{})
+		r, err := e.Check("rm /proj/file", "/proj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Allowed || r.FallThrough {
+			t.Errorf("expected explicit deny, got Allowed=%v FallThrough=%v", r.Allowed, r.FallThrough)
+		}
+		if r.DecidingRule != "blocker" {
+			t.Errorf("deciding rule: got %q, want %q", r.DecidingRule, "blocker")
+		}
+		// Verify deny RuleMatch present.
+		hasDeny := false
+		for _, m := range r.RuleMatches {
+			if m.Action == "deny" && m.Rule == "blocker" {
+				hasDeny = true
+			}
+		}
+		if !hasDeny {
+			t.Errorf("expected deny RuleMatch from rule 'blocker'; got %v", r.RuleMatches)
+		}
+	})
+
+	// --- Scenario 16: unexpanded $VAR in argv — rule abstains via path_scope ---
+	t.Run("16_unexpanded_var_argv_abstains", func(t *testing.T) {
+		t.Parallel()
+		// VariableActionAllow so the variable check does not block before path_scope runs.
+		rule := config.Rule{
+			Name:           "cat-proj",
+			Allow:          []config.Pattern{{Type: config.PatternPrefix, Pattern: "cat"}},
+			PathScope:      []string{"/proj"},
+			VariableAction: config.VariableActionAllow,
+		}
+		e := newTestEngineWithEnv(t, []config.Rule{rule}, nil, map[string]string{})
+		// $HOME/foo is treated as a literal token; it contains "/" so it is a path
+		// candidate. With cwd=/home/user it resolves to /home/user/$HOME/foo — not
+		// under /proj — so pathsInScope returns false and the rule abstains.
+		// TODO(per-ivhv): assert a path_scope SkippedRule once that recording is added.
+		r, err := e.Check("cat $HOME/foo", "/home/user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFallThrough(t, r, "unexpanded var in argv: rule abstains")
+	})
+
+	// --- Scenario 17: command at position 0 with "/" is not a candidate ---
+	t.Run("17_command_at_pos0_not_candidate", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "./scripts/deploy.sh", []string{"/proj"})}, nil, map[string]string{})
+		// args[0]="./scripts/deploy.sh" is skipped; args[1]="/proj/arg" is the only candidate.
+		r, err := e.Check("./scripts/deploy.sh /proj/arg", "/proj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "pos-0 token not a candidate")
+	})
+
+	// --- Scenario 18: quoted arg with spaces — only the path arg is a candidate ---
+	t.Run("18_quoted_arg_with_spaces", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "cp", []string{"/proj"})}, nil, map[string]string{})
+		// Parser produces Args=["cp", "my file.txt", "/proj/dest"].
+		// "my file.txt" has no "/" → not a candidate.
+		// "/proj/dest" → candidate → in-scope.
+		r, err := e.Check(`cp "my file.txt" /proj/dest`, "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "quoted arg with spaces: only path arg is candidate")
+	})
+
+	// --- Scenario 19: --out=/etc/passwd with scope /proj — RHS extracted, out-of-scope ---
+	t.Run("19_flag_eq_rhs_out_of_scope", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "tool", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("tool --out=/etc/passwd", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFallThrough(t, r, "--out=/etc/passwd RHS out-of-scope")
+	})
+
+	// --- Scenario 20: -o=/proj/file with scope /proj — RHS in-scope ---
+	t.Run("20_flag_eq_rhs_in_scope", func(t *testing.T) {
+		t.Parallel()
+		e := newTestEngineWithEnv(t, []config.Rule{allowRule("r", "tool", []string{"/proj"})}, nil, map[string]string{})
+		r, err := e.Check("tool -o=/proj/file", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAllowed(t, r, "-o=/proj/file RHS in-scope")
+	})
+}

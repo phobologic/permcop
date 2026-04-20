@@ -1144,6 +1144,13 @@ func TestCompileScopeEntries(t *testing.T) {
 			wantConfigured: true,
 			wantScope:      nil,
 		},
+		{
+			name:           "compound path with empty-valued variable: entry dropped",
+			pathScope:      []string{"/prefix/${DIR}/suffix"},
+			env:            map[string]string{"DIR": ""},
+			wantConfigured: true,
+			wantScope:      nil,
+		},
 	}
 
 	for _, tc := range tests {

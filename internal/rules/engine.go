@@ -174,10 +174,13 @@ func compileScopeEntries(pathScope []string, homeDir string, env map[string]stri
 			}
 			entry = homeDir + entry[1:]
 		}
-		// Expand $VAR / ${VAR}; drop if any variable missing or result is empty.
+		// Expand $VAR / ${VAR}; drop if any variable is missing or empty-valued.
+		// expandVarsNonEmpty treats empty-valued variables as unresolved so that
+		// compound paths like "/prefix/${DIR}/suffix" with DIR="" are dropped
+		// rather than silently broadened by filepath.Clean.
 		if strings.ContainsAny(entry, "$") {
-			expanded, ok := expandVars(entry, env)
-			if !ok || expanded == "" {
+			expanded, ok := expandVarsNonEmpty(entry, env)
+			if !ok {
 				continue
 			}
 			entry = expanded
@@ -693,6 +696,26 @@ func expandVars(s string, env map[string]string) (string, bool) {
 	result := os.Expand(s, func(name string) string {
 		val, ok := env[name]
 		if !ok {
+			allResolved = false
+			return ""
+		}
+		return val
+	})
+	if !allResolved {
+		return "", false
+	}
+	return result, true
+}
+
+// expandVarsNonEmpty is like expandVars but also treats variables that resolve
+// to the empty string as unresolved. This prevents a variable expanding to ""
+// inside a compound path (e.g. "/prefix/${DIR}/suffix" with DIR="") from
+// silently producing a broader path after filepath.Clean strips the empty segment.
+func expandVarsNonEmpty(s string, env map[string]string) (string, bool) {
+	allResolved := true
+	result := os.Expand(s, func(name string) string {
+		val, ok := env[name]
+		if !ok || val == "" {
 			allResolved = false
 			return ""
 		}

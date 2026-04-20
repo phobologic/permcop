@@ -705,6 +705,58 @@ func TestApplyDefaults_LogFileInsideHome(t *testing.T) {
 	}
 }
 
+func TestLoadFile_PathScope_Present(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "scoped rule"
+path_scope = ["/a", "~/b"]
+allow = ["git status"]
+`)
+
+	cfg, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(cfg.Rules))
+	}
+	got := cfg.Rules[0].PathScope
+	want := []string{"/a", "~/b"}
+	if len(got) != len(want) {
+		t.Fatalf("PathScope: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("PathScope[%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLoadFile_PathScope_Absent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "config.toml", `
+[[rules]]
+name = "unscoped rule"
+allow = ["git status"]
+`)
+
+	cfg, err := LoadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(cfg.Rules))
+	}
+	if cfg.Rules[0].PathScope != nil {
+		t.Errorf("PathScope: got %v, want nil", cfg.Rules[0].PathScope)
+	}
+}
+
 func TestPatternUnmarshal_UnknownType(t *testing.T) {
 	t.Parallel()
 

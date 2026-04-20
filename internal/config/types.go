@@ -105,6 +105,9 @@ type Rule struct {
 	// allows a rule with pattern "sed" to match both "sed" and "/usr/bin/sed".
 	// Overrides the global default when set. Defaults to nil (use global default).
 	StripCommandPath *bool `toml:"strip_command_path"`
+	// PathScope restricts this rule to commands whose CWD matches one of the
+	// listed path prefixes. Nil (omitted) means the rule applies in any CWD.
+	PathScope []string `toml:"path_scope"`
 }
 
 // EffectiveDenySubshells returns whether subshells should be denied,

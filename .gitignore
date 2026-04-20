@@ -7,3 +7,4 @@ coverage.html
 .tickets/
 .code-review/
 .permcop.local.toml
+.worktrees/

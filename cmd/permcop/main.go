@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -366,11 +367,12 @@ func runExplain(command string) {
 }
 
 func writeExplainResult(w io.Writer, command string, result *rules.Result) {
-	fmt.Fprintf(w, "Command:  %s\n", command)
-	fmt.Fprintf(w, "Units:    ")
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "Command:  %s\n", command)
+	fmt.Fprintf(&b, "Units:    ")
 	for i, u := range result.Units {
 		if i > 0 {
-			fmt.Fprint(w, ", ")
+			fmt.Fprint(&b, ", ")
 		}
 		flags := ""
 		if u.HasVariable {
@@ -379,48 +381,49 @@ func writeExplainResult(w io.Writer, command string, result *rules.Result) {
 		if u.HasSubshell {
 			flags += "[subshell]"
 		}
-		fmt.Fprintf(w, "[%s %s%s]", u.Kind, u.Value, flags)
+		fmt.Fprintf(&b, "[%s %s%s]", u.Kind, u.Value, flags)
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w)
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b)
 
 	switch {
 	case result.Allowed:
-		fmt.Fprintf(w, "Result:   ALLOW\n")
+		fmt.Fprintf(&b, "Result:   ALLOW\n")
 		if result.DecidingRule != "" {
-			fmt.Fprintf(w, "Rule:     %q\n", result.DecidingRule)
+			fmt.Fprintf(&b, "Rule:     %q\n", result.DecidingRule)
 		}
 		if result.DecidingPattern != "" {
-			fmt.Fprintf(w, "Pattern:  %s\n", result.DecidingPattern)
+			fmt.Fprintf(&b, "Pattern:  %s\n", result.DecidingPattern)
 		}
 		if result.DecidingUnit != nil {
-			fmt.Fprintf(w, "Hit unit: %s\n", result.DecidingUnit.Value)
+			fmt.Fprintf(&b, "Hit unit: %s\n", result.DecidingUnit.Value)
 		}
 		if result.Reason != "" {
-			fmt.Fprintf(w, "Warning:  %s\n", result.Reason)
+			fmt.Fprintf(&b, "Warning:  %s\n", result.Reason)
 		}
 	case result.FallThrough:
-		fmt.Fprintf(w, "Result:   PASS (no matching rule — deferred to Claude Code)\n")
+		fmt.Fprintf(&b, "Result:   PASS (no matching rule — deferred to Claude Code)\n")
 		for _, m := range result.RuleMatches {
 			for _, sk := range m.SkippedRules {
-				fmt.Fprintf(w, "          skipped: rule=%q — %s\n", sk.Rule, sk.Reason)
+				fmt.Fprintf(&b, "          skipped: rule=%q — %s\n", sk.Rule, sk.Reason)
 			}
 		}
 	default:
-		fmt.Fprintf(w, "Result:   DENY\n")
+		fmt.Fprintf(&b, "Result:   DENY\n")
 		if result.Reason != "" {
-			fmt.Fprintf(w, "Reason:   %s\n", result.Reason)
+			fmt.Fprintf(&b, "Reason:   %s\n", result.Reason)
 		}
 		if result.DecidingRule != "" {
-			fmt.Fprintf(w, "Rule:     %q\n", result.DecidingRule)
+			fmt.Fprintf(&b, "Rule:     %q\n", result.DecidingRule)
 		}
 		if result.DecidingPattern != "" {
-			fmt.Fprintf(w, "Pattern:  %s\n", result.DecidingPattern)
+			fmt.Fprintf(&b, "Pattern:  %s\n", result.DecidingPattern)
 		}
 		if result.DecidingUnit != nil {
-			fmt.Fprintf(w, "Hit unit: %s\n", result.DecidingUnit.Value)
+			fmt.Fprintf(&b, "Hit unit: %s\n", result.DecidingUnit.Value)
 		}
 	}
+	_, _ = w.Write(b.Bytes())
 }
 
 // validatePatterns constructs a rules engine from cfg to catch invalid glob and

@@ -125,16 +125,18 @@ func (c compiledGlobPath) match(path string) bool {
 
 // compiledRule mirrors config.Rule with all patterns pre-compiled.
 type compiledRule struct {
-	rule       *config.Rule
-	allow      []compiledPattern
-	deny       []compiledPattern
-	allowRead  []compiledGlobPath
-	denyRead   []compiledGlobPath
-	allowWrite []compiledGlobPath
-	denyWrite  []compiledGlobPath
+	rule            *config.Rule
+	allow           []compiledPattern
+	deny            []compiledPattern
+	allowRead       []compiledGlobPath
+	denyRead        []compiledGlobPath
+	allowWrite      []compiledGlobPath
+	denyWrite       []compiledGlobPath
+	scopeConfigured bool     // true iff source Rule.PathScope was non-nil
+	scope           []string // compiled, cleaned absolute paths from PathScope
 }
 
-func compileRules(rules []config.Rule, homeDir string) ([]compiledRule, error) {
+func compileRules(rules []config.Rule, homeDir string, env map[string]string) ([]compiledRule, error) {
 	cr := make([]compiledRule, len(rules))
 	for i := range rules {
 		r := &rules[i]
@@ -150,8 +152,43 @@ func compileRules(rules []config.Rule, homeDir string) ([]compiledRule, error) {
 		cr[i].denyRead = compileGlobPaths(r.DenyRead, homeDir)
 		cr[i].allowWrite = compileGlobPaths(r.AllowWrite, homeDir)
 		cr[i].denyWrite = compileGlobPaths(r.DenyWrite, homeDir)
+		cr[i].scopeConfigured, cr[i].scope = compileScopeEntries(r.PathScope, homeDir, env)
 	}
 	return cr, nil
+}
+
+// compileScopeEntries returns (configured, entries) for a PathScope slice.
+// configured is true iff pathScope is non-nil (even when empty or all entries are dropped).
+// Each entry undergoes ~/ expansion, variable substitution, filepath.Clean, and an
+// absolute-path check; entries that fail any step are silently dropped.
+func compileScopeEntries(pathScope []string, homeDir string, env map[string]string) (bool, []string) {
+	if pathScope == nil {
+		return false, nil
+	}
+	var out []string
+	for _, entry := range pathScope {
+		// Expand leading ~/
+		if strings.HasPrefix(entry, "~/") {
+			if homeDir == "" {
+				continue
+			}
+			entry = homeDir + entry[1:]
+		}
+		// Expand $VAR / ${VAR}; drop if any variable missing or result is empty.
+		if strings.ContainsAny(entry, "$") {
+			expanded, ok := expandVars(entry, env)
+			if !ok || expanded == "" {
+				continue
+			}
+			entry = expanded
+		}
+		entry = filepath.Clean(entry)
+		if !filepath.IsAbs(entry) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return true, out
 }
 
 func compilePatterns(ps []config.Pattern) ([]compiledPattern, error) {
@@ -194,14 +231,15 @@ type Engine struct {
 // Returns an error if any rule contains an invalid glob or regex pattern.
 func New(cfg *config.Config, logger *audit.Logger) (*Engine, error) {
 	homeDir, _ := os.UserHomeDir()
-	cr, err := compileRules(cfg.Rules, homeDir)
+	env := osEnvMap()
+	cr, err := compileRules(cfg.Rules, homeDir, env)
 	if err != nil {
 		return nil, err
 	}
 	return &Engine{
 		cfg:           cfg,
 		logger:        logger,
-		env:           osEnvMap(),
+		env:           env,
 		homeDir:       homeDir,
 		compiledRules: cr,
 	}, nil
@@ -211,7 +249,7 @@ func New(cfg *config.Config, logger *audit.Logger) (*Engine, error) {
 // Returns an error if any rule contains an invalid glob or regex pattern.
 func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string) (*Engine, error) {
 	homeDir, _ := os.UserHomeDir()
-	cr, err := compileRules(cfg.Rules, homeDir)
+	cr, err := compileRules(cfg.Rules, homeDir, env)
 	if err != nil {
 		return nil, err
 	}

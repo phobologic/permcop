@@ -125,16 +125,18 @@ func (c compiledGlobPath) match(path string) bool {
 
 // compiledRule mirrors config.Rule with all patterns pre-compiled.
 type compiledRule struct {
-	rule       *config.Rule
-	allow      []compiledPattern
-	deny       []compiledPattern
-	allowRead  []compiledGlobPath
-	denyRead   []compiledGlobPath
-	allowWrite []compiledGlobPath
-	denyWrite  []compiledGlobPath
+	rule            *config.Rule
+	allow           []compiledPattern
+	deny            []compiledPattern
+	allowRead       []compiledGlobPath
+	denyRead        []compiledGlobPath
+	allowWrite      []compiledGlobPath
+	denyWrite       []compiledGlobPath
+	scopeConfigured bool     // true iff source Rule.PathScope was non-nil
+	scope           []string // compiled, cleaned absolute paths from PathScope
 }
 
-func compileRules(rules []config.Rule, homeDir string) ([]compiledRule, error) {
+func compileRules(rules []config.Rule, homeDir string, env map[string]string) ([]compiledRule, error) {
 	cr := make([]compiledRule, len(rules))
 	for i := range rules {
 		r := &rules[i]
@@ -150,8 +152,46 @@ func compileRules(rules []config.Rule, homeDir string) ([]compiledRule, error) {
 		cr[i].denyRead = compileGlobPaths(r.DenyRead, homeDir)
 		cr[i].allowWrite = compileGlobPaths(r.AllowWrite, homeDir)
 		cr[i].denyWrite = compileGlobPaths(r.DenyWrite, homeDir)
+		cr[i].scopeConfigured, cr[i].scope = compileScopeEntries(r.PathScope, homeDir, env)
 	}
 	return cr, nil
+}
+
+// compileScopeEntries returns (configured, entries) for a PathScope slice.
+// configured is true iff pathScope is non-nil (even when empty or all entries are dropped).
+// Each entry undergoes ~/ expansion, variable substitution, filepath.Clean, and an
+// absolute-path check; entries that fail any step are silently dropped.
+func compileScopeEntries(pathScope []string, homeDir string, env map[string]string) (bool, []string) {
+	if pathScope == nil {
+		return false, nil
+	}
+	var out []string
+	for _, entry := range pathScope {
+		// Expand leading ~/
+		if strings.HasPrefix(entry, "~/") {
+			if homeDir == "" {
+				continue
+			}
+			entry = homeDir + entry[1:]
+		}
+		// Expand $VAR / ${VAR}; drop if any variable is missing or empty-valued.
+		// expandVarsNonEmpty treats empty-valued variables as unresolved so that
+		// compound paths like "/prefix/${DIR}/suffix" with DIR="" are dropped
+		// rather than silently broadened by filepath.Clean.
+		if strings.ContainsAny(entry, "$") {
+			expanded, ok := expandVarsNonEmpty(entry, env)
+			if !ok {
+				continue
+			}
+			entry = expanded
+		}
+		entry = filepath.Clean(entry)
+		if !filepath.IsAbs(entry) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return true, out
 }
 
 func compilePatterns(ps []config.Pattern) ([]compiledPattern, error) {
@@ -194,14 +234,15 @@ type Engine struct {
 // Returns an error if any rule contains an invalid glob or regex pattern.
 func New(cfg *config.Config, logger *audit.Logger) (*Engine, error) {
 	homeDir, _ := os.UserHomeDir()
-	cr, err := compileRules(cfg.Rules, homeDir)
+	env := osEnvMap()
+	cr, err := compileRules(cfg.Rules, homeDir, env)
 	if err != nil {
 		return nil, err
 	}
 	return &Engine{
 		cfg:           cfg,
 		logger:        logger,
-		env:           osEnvMap(),
+		env:           env,
 		homeDir:       homeDir,
 		compiledRules: cr,
 	}, nil
@@ -211,7 +252,7 @@ func New(cfg *config.Config, logger *audit.Logger) (*Engine, error) {
 // Returns an error if any rule contains an invalid glob or regex pattern.
 func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string) (*Engine, error) {
 	homeDir, _ := os.UserHomeDir()
-	cr, err := compileRules(cfg.Rules, homeDir)
+	cr, err := compileRules(cfg.Rules, homeDir, env)
 	if err != nil {
 		return nil, err
 	}
@@ -393,6 +434,16 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				}
 				u.Value = expanded
 				u.HasVariable = false
+				// Expand Args so pathsInScope sees resolved tokens, not literal $VAR.
+				expandedArgs := make([]string, len(u.Args))
+				for i, arg := range u.Args {
+					if ea, ok2 := expandVars(arg, e.env); ok2 {
+						expandedArgs[i] = ea
+					} else {
+						expandedArgs[i] = arg
+					}
+				}
+				u.Args = expandedArgs
 			}
 
 			// Strip command path for pattern matching.
@@ -411,7 +462,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				continue
 			}
 
-			if ok, pat := unitCoveredByRule(cr, u); ok {
+			if ok, pat := unitCoveredByRule(cr, u, cwd, e.homeDir); ok {
 				lastUnit = orig
 				lastPat = pat
 				lastRule = cr.rule.Name
@@ -510,7 +561,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind, cwd string) (*Resu
 	// Pass 2: Allow scan (file-only rules can cover a single file unit)
 	for i := range e.compiledRules {
 		cr := e.compiledRules[i]
-		if covered, pat := unitCoveredByRule(cr, unit); covered {
+		if covered, pat := unitCoveredByRule(cr, unit, cwd, e.homeDir); covered {
 			entry.RuleMatches = []audit.RuleMatch{{
 				Rule:    cr.rule.Name,
 				Pattern: pat,
@@ -614,7 +665,7 @@ func flagTokenMatches(token, flag string) bool {
 	return false
 }
 
-func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit) (bool, string) {
+func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit, cwd, homeDir string) (bool, string) {
 	switch u.Kind {
 	case parser.UnitCommand:
 		for _, cp := range cr.allow {
@@ -622,6 +673,9 @@ func unitCoveredByRule(cr compiledRule, u parser.CheckableUnit) (bool, string) {
 				// escalate_flags: if any listed flag is present, this pattern
 				// abstains — the unit is not covered and falls through to Claude Code.
 				if escalateFlagPresent(cp.p.EscalateFlags, u.Value) {
+					continue
+				}
+				if !pathsInScope(u.Args, cr.scope, cr.scopeConfigured, cwd, homeDir) {
 					continue
 				}
 				return true, patternString(cp.p)
@@ -664,6 +718,84 @@ func expandVars(s string, env map[string]string) (string, bool) {
 		return "", false
 	}
 	return result, true
+}
+
+// expandVarsNonEmpty is like expandVars but also treats variables that resolve
+// to the empty string as unresolved. This prevents a variable expanding to ""
+// inside a compound path (e.g. "/prefix/${DIR}/suffix" with DIR="") from
+// silently producing a broader path after filepath.Clean strips the empty segment.
+func expandVarsNonEmpty(s string, env map[string]string) (string, bool) {
+	allResolved := true
+	result := os.Expand(s, func(name string) string {
+		val, ok := env[name]
+		if !ok || val == "" {
+			allResolved = false
+			return ""
+		}
+		return val
+	})
+	if !allResolved {
+		return "", false
+	}
+	return result, true
+}
+
+// pathsInScope reports whether every path-like argument in args is covered by
+// the compiled scope. args is the structured argv (args[0] is the command name
+// and is never evaluated). See the ticket per-yoor for the full algorithm spec.
+func pathsInScope(args []string, scope []string, scopeConfigured bool, cwd, homeDir string) bool {
+	if !scopeConfigured {
+		return true
+	}
+
+	// Collect path candidates from args[1:].
+	var candidates []string
+	for _, tok := range args[1:] {
+		if !strings.HasPrefix(tok, "-") {
+			if strings.Contains(tok, "/") {
+				candidates = append(candidates, tok)
+			}
+		} else if strings.Contains(tok, "=") {
+			// Flag with attached value: -o=/path or --out=/path
+			rhs := tok[strings.IndexByte(tok, '=')+1:]
+			if strings.Contains(rhs, "/") {
+				candidates = append(candidates, rhs)
+			}
+		}
+		// Bare flag (-i, --recursive): not a candidate.
+	}
+
+	if len(candidates) == 0 {
+		return true
+	}
+	if len(scope) == 0 {
+		return false
+	}
+
+	for _, c := range candidates {
+		// Resolve the candidate to an absolute path.
+		if strings.HasPrefix(c, "~/") {
+			if homeDir != "" {
+				c = homeDir + c[1:]
+			}
+		}
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(cwd, c)
+		}
+		c = filepath.Clean(c)
+
+		inScope := false
+		for _, s := range scope {
+			if c == s || s == "/" || strings.HasPrefix(c, s+"/") {
+				inScope = true
+				break
+			}
+		}
+		if !inScope {
+			return false
+		}
+	}
+	return true
 }
 
 // unitHasSudo reports whether a single parsed command unit invokes sudo.

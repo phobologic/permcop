@@ -836,6 +836,65 @@ allow = ["git status"]
 	}
 }
 
+func TestParseFragment_Valid(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := ParseFragment(`
+[[rules]]
+name = "allow git"
+allow = ["git status"]
+`)
+	if err != nil {
+		t.Fatalf("ParseFragment: %v", err)
+	}
+	if len(cfg.Rules) != 1 || cfg.Rules[0].Name != "allow git" {
+		t.Errorf("unexpected rules: %v", cfg.Rules)
+	}
+}
+
+func TestParseFragment_PathScope_EmptyList(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseFragment(`
+[[rules]]
+name = "bad scope"
+path_scope = []
+allow = ["git status"]
+`)
+	if err == nil {
+		t.Fatal("expected error for empty path_scope, got nil")
+	}
+	if !strings.Contains(err.Error(), "bad scope") {
+		t.Errorf("error should name the offending rule, got: %v", err)
+	}
+}
+
+func TestParseFragment_PathScope_WhitespaceEntry(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseFragment(`
+[[rules]]
+name = "whitespace scope"
+path_scope = ["   "]
+allow = ["git status"]
+`)
+	if err == nil {
+		t.Fatal("expected error for whitespace-only path_scope entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "whitespace scope") {
+		t.Errorf("error should name the offending rule, got: %v", err)
+	}
+}
+
+func TestParseFragment_InvalidTOML(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseFragment(`this is not valid toml = = =`)
+	if err == nil {
+		t.Fatal("expected error for invalid TOML, got nil")
+	}
+}
+
 func TestPatternUnmarshal_UnknownType(t *testing.T) {
 	t.Parallel()
 

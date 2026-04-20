@@ -365,7 +365,6 @@ func runExplain(command string) {
 	writeExplainResult(os.Stdout, command, result)
 }
 
-// writeExplainResult formats a rule evaluation result for human-readable display.
 func writeExplainResult(w io.Writer, command string, result *rules.Result) {
 	fmt.Fprintf(w, "Command:  %s\n", command)
 	fmt.Fprintf(w, "Units:    ")

@@ -111,6 +111,9 @@ func ParseFragment(data string) (*Config, error) {
 	if _, err := toml.Decode(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
 	}
+	if err := validateRules(&cfg); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 

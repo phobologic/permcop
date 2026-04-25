@@ -1,0 +1,5 @@
+.permcop.local.toml
+.claude/settings.local.json
+.tickets
+.tmp
+.code-review

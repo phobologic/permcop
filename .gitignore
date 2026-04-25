@@ -4,9 +4,9 @@
 dist/
 coverage.out
 coverage.html
-.tickets/
-.code-review/
+.tickets
+.code-review
 .permcop.local.toml
-.worktrees/
-.tmp/
+.worktrees
+.tmp
 .DS_Store

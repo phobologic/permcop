@@ -256,7 +256,7 @@ With this rule, `sed -i 's/foo/bar/' ${PROJECT_DIR}/src/main.go` is covered; `se
 **Fail-closed semantics** — when no `.git` ancestor is found above the request's working directory (e.g. a command runs outside any repository), the variable is unresolved. Rules referencing it are effectively dropped, and the audit log attaches a diagnostic message for each affected rule on every subsequent command:
 
 ```
-  diag: rule "allow project tee writes": ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.
+  diag: rule "allow project tee writes": $PERMCOP_PROJECT_ROOT unresolved (no .git ancestor found above request CWD); rule effectively dropped.
 ```
 
 **Example — allow `tee -a` writes scoped to the project root (suitable for the global config):**

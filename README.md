@@ -239,6 +239,37 @@ With this rule, `sed -i 's/foo/bar/' ${PROJECT_DIR}/src/main.go` is covered; `se
 
 **Fail-closed variable expansion.** If a scope entry contains a variable (e.g. `${PROJECT_DIR}`) and that variable is missing or empty in the environment, the entry is silently dropped. A fully-dropped `path_scope` (all entries removed due to missing/empty variables) vacuously covers commands that have no path candidates — commands with no `/`-prefixed arguments or `--flag=/…` tokens. This means configuring `path_scope` with all-missing variables silently widens coverage for path-less commands. Set variables in the environment before running permcop, or validate your config with `permcop validate` to catch this.
 
+### `PERMCOP_PROJECT_ROOT` — synthetic project variable
+
+`${PERMCOP_PROJECT_ROOT}` is a built-in variable that permcop resolves automatically at engine startup. It is set to the nearest ancestor directory of the request's working directory that contains a `.git` entry (a `.git/` directory or a `.git` worktree pointer file). You do not need to export it to the environment.
+
+**Supported fields** — `${PERMCOP_PROJECT_ROOT}` is expanded in path fields only:
+
+- `path_scope`
+- `allow_read`
+- `allow_write`
+- `deny_read`
+- `deny_write`
+
+**Not supported** — `${PERMCOP_PROJECT_ROOT}` is **not** expanded in command `allow` or `deny` patterns, even when the rule sets `expand_variables = true`. Use the path fields above to scope rules to the project root.
+
+**Fail-closed semantics** — when no `.git` ancestor is found above the request's working directory (e.g. a command runs outside any repository), the variable is unresolved. Rules referencing it are effectively dropped, and the audit log attaches a diagnostic message for each affected rule on every subsequent command:
+
+```
+  diag: rule "allow project tee writes": ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.
+```
+
+**Example — allow `tee -a` writes scoped to the project root (suitable for the global config):**
+
+```toml
+[[rules]]
+name       = "allow project tee writes"
+path_scope = ["${PERMCOP_PROJECT_ROOT}"]
+allow      = [{ type = "prefix", pattern = "tee -a" }]
+```
+
+With this rule, `tee -a /path/to/project/logs/build.log` is covered when the target path resolves inside the detected project root. `tee -a /tmp/out.log` is not covered — `/tmp/out.log` is outside the project root.
+
 ### Per-unit coverage
 
 Each parsed unit is evaluated independently against all rules. A chain like `echo hi > /tmp/out.txt` produces two units: the `echo` command and the `/tmp/out.txt` write. Each unit finds any rule that covers it — they don't need to be in the same rule.

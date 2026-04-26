@@ -278,6 +278,83 @@ func TestFallThroughCheckFileCarriesDiagnostics(t *testing.T) {
 	}
 }
 
+func TestDiagnosticMessagePathScopeOnlySaysEffectivelyDropped(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Defaults: defaultsForTest(),
+		Rules:    []config.Rule{diagRuleWithField("scope-only", "path_scope")},
+	}
+	logger := audit.New(os.DevNull, "", 0, 0)
+	e, err := NewWithEnv(cfg, logger, map[string]string{}, "/nonexistent/cwd/xyz-permcop-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.diagnostics) == 0 {
+		t.Fatal("expected diagnostic")
+	}
+	if !strings.Contains(e.diagnostics[0], "effectively dropped") {
+		t.Errorf("path_scope-only unresolved should say 'effectively dropped'; got: %q", e.diagnostics[0])
+	}
+}
+
+func TestDiagnosticMessageGlobFieldsOnlySaysPathGlobIneffective(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{"allow_read", "allow_write", "deny_read", "deny_write"} {
+		field := field
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{
+				Defaults: defaultsForTest(),
+				Rules:    []config.Rule{diagRuleWithField("glob-only-"+field, field)},
+			}
+			logger := audit.New(os.DevNull, "", 0, 0)
+			e, err := NewWithEnv(cfg, logger, map[string]string{}, "/nonexistent/cwd/xyz-permcop-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(e.diagnostics) == 0 {
+				t.Fatalf("field %q: expected diagnostic", field)
+			}
+			if strings.Contains(e.diagnostics[0], "effectively dropped") {
+				t.Errorf("field %q: glob-only unresolved must not say 'effectively dropped'; got: %q", field, e.diagnostics[0])
+			}
+			if !strings.Contains(e.diagnostics[0], "path-glob constraints") {
+				t.Errorf("field %q: glob-only unresolved should mention 'path-glob constraints'; got: %q", field, e.diagnostics[0])
+			}
+		})
+	}
+}
+
+func TestDiagnosticMessageBothFieldsSaysEffectivelyDropped(t *testing.T) {
+	t.Parallel()
+
+	// When path_scope AND glob fields both reference the var, "effectively dropped"
+	// takes precedence because the scope constraint is the more severe impact.
+	r := config.Rule{
+		Name:       "both-fields",
+		PathScope:  []string{"${PERMCOP_PROJECT_ROOT}/a"},
+		AllowWrite: []string{"${PERMCOP_PROJECT_ROOT}/b/**"},
+		Allow:      []config.Pattern{{Type: config.PatternPrefix, Pattern: "ls"}},
+	}
+	cfg := &config.Config{
+		Defaults: defaultsForTest(),
+		Rules:    []config.Rule{r},
+	}
+	logger := audit.New(os.DevNull, "", 0, 0)
+	e, err := NewWithEnv(cfg, logger, map[string]string{}, "/nonexistent/cwd/xyz-permcop-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.diagnostics) != 1 {
+		t.Fatalf("expected 1 diagnostic; got %d: %v", len(e.diagnostics), e.diagnostics)
+	}
+	if !strings.Contains(e.diagnostics[0], "effectively dropped") {
+		t.Errorf("path_scope+glob-fields unresolved should say 'effectively dropped'; got: %q", e.diagnostics[0])
+	}
+}
+
 func TestDiagnosticNotEmittedWhenProjectRootResolved(t *testing.T) {
 	t.Parallel()
 

@@ -251,12 +251,12 @@ With this rule, `sed -i 's/foo/bar/' ${PROJECT_DIR}/src/main.go` is covered; `se
 - `deny_read`
 - `deny_write`
 
-**Not supported** — `${PERMCOP_PROJECT_ROOT}` is **not** expanded in command `allow` or `deny` patterns, even when the rule sets `expand_variables = true`. Use the path fields above to scope rules to the project root.
+**Not available to `expand_variables`** — permcop's synthetic `PERMCOP_PROJECT_ROOT` value is not injected into the environment that `expand_variables` reads from. If `PERMCOP_PROJECT_ROOT` happens to be set in the process environment when permcop runs, command patterns with `expand_variables = true` will expand it from there — but that value bypasses the per-request `.git` ancestor lookup and may not reflect the correct project root. Use the path fields above to scope rules to the project root.
 
 **Fail-closed semantics** — when no `.git` ancestor is found above the request's working directory (e.g. a command runs outside any repository), the variable is unresolved. Rules referencing it are effectively dropped, and the audit log attaches a diagnostic message for each affected rule on every subsequent command:
 
 ```
-  diag: rule "allow project tee writes": ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.
+  diag: rule "allow project tee writes": $PERMCOP_PROJECT_ROOT unresolved (no .git ancestor found above request CWD); rule effectively dropped.
 ```
 
 **Example — allow `tee -a` writes scoped to the project root (suitable for the global config):**

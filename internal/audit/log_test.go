@@ -279,7 +279,7 @@ func TestDiagnosticsTextRendering(t *testing.T) {
 			Timestamp:       time.Now(),
 			Decision:        DecisionDeny,
 			OriginalCommand: "ls /repo",
-			Diagnostics:     []string{`rule "my-rule": ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.`},
+			Diagnostics:     []string{`rule "my-rule": $PERMCOP_PROJECT_ROOT unresolved (no .git ancestor found above request CWD); rule effectively dropped.`},
 		})
 		if !strings.Contains(line, "  diag: ") {
 			t.Errorf("expected diag: line in text output; got:\n%s", line)

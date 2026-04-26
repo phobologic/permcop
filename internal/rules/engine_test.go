@@ -1937,3 +1937,225 @@ func TestEngine_PathScope_SkippedRules(t *testing.T) {
 		}
 	})
 }
+
+// TestCompileGlobPaths_VarExpansion verifies that $VAR/${VAR} references in path-glob
+// fields are expanded using the same pathEnv map as compileScopeEntries, and that
+// entries whose variables are absent or empty produce non-matching sentinels.
+func TestCompileGlobPaths_VarExpansion(t *testing.T) {
+	t.Parallel()
+
+	// newEnvEngine is a shortcut that builds an engine with env and returns it.
+	// The command rule covers the command token; path-glob fields gate the file unit.
+	newEnvEngine := func(t *testing.T, rule config.Rule, env map[string]string) *Engine {
+		t.Helper()
+		return newTestEngineWithEnv(t, []config.Rule{rule}, nil, env)
+	}
+
+	// allow_read: resolved var → ALLOW; unresolved var → DENY.
+	t.Run("allow_read_resolved", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:      "cat-project",
+			Allow:     []config.Pattern{{Type: config.PatternExact, Pattern: "cat"}},
+			AllowRead: []string{"$PROJECT_DIR/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{"PROJECT_DIR": "/proj"})
+		r, err := e.Check("cat < /proj/src/main.go", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Allowed {
+			t.Errorf("allow_read resolved: expected ALLOW, got DENY: %s", r.Reason)
+		}
+	})
+
+	t.Run("allow_read_unresolved", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:      "cat-project",
+			Allow:     []config.Pattern{{Type: config.PatternExact, Pattern: "cat"}},
+			AllowRead: []string{"$PROJECT_DIR/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{}) // PROJECT_DIR absent
+		r, err := e.Check("cat < /proj/src/main.go", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Allowed {
+			t.Error("allow_read unresolved: expected DENY (sentinel should not match), got ALLOW")
+		}
+	})
+
+	// allow_write: resolved var → ALLOW; unresolved var → DENY.
+	t.Run("allow_write_resolved", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:       "echo-output",
+			Allow:      []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+			AllowWrite: []string{"${OUTPUT_DIR}/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{"OUTPUT_DIR": "/tmp/out"})
+		r, err := e.Check("echo hi > /tmp/out/result.txt", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Allowed {
+			t.Errorf("allow_write resolved: expected ALLOW, got DENY: %s", r.Reason)
+		}
+	})
+
+	t.Run("allow_write_unresolved", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:       "echo-output",
+			Allow:      []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+			AllowWrite: []string{"${OUTPUT_DIR}/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{}) // OUTPUT_DIR absent
+		r, err := e.Check("echo hi > /tmp/out/result.txt", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Allowed {
+			t.Error("allow_write unresolved: expected DENY (sentinel should not match), got ALLOW")
+		}
+	})
+
+	// deny_read: resolved var → DENY; unresolved var → no deny (sentinel doesn't trigger).
+	t.Run("deny_read_resolved", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:     "cat-with-deny",
+			Allow:    []config.Pattern{{Type: config.PatternExact, Pattern: "cat"}},
+			DenyRead: []string{"${SECRET_DIR}/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{"SECRET_DIR": "/etc/secrets"})
+		r, err := e.Check("cat < /etc/secrets/key.pem", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Allowed {
+			t.Error("deny_read resolved: expected DENY, got ALLOW")
+		}
+	})
+
+	t.Run("deny_read_unresolved", func(t *testing.T) {
+		t.Parallel()
+		// deny_read with unresolved var must not match — sentinel never fires.
+		// We need allow_read too so the read unit can be covered.
+		rule := config.Rule{
+			Name:      "cat-with-deny",
+			Allow:     []config.Pattern{{Type: config.PatternExact, Pattern: "cat"}},
+			AllowRead: []string{"/etc/secrets/**"},
+			DenyRead:  []string{"${SECRET_DIR}/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{}) // SECRET_DIR absent → sentinel
+		r, err := e.Check("cat < /etc/secrets/key.pem", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Allowed {
+			t.Errorf("deny_read unresolved: expected ALLOW (sentinel must not fire), got DENY: %s", r.Reason)
+		}
+	})
+
+	// deny_write: resolved var → DENY; unresolved var → no deny (sentinel doesn't trigger).
+	t.Run("deny_write_resolved", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:       "echo-with-deny",
+			Allow:      []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+			AllowWrite: []string{"/tmp/**"},
+			DenyWrite:  []string{"${SECRET_DIR}/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{"SECRET_DIR": "/tmp/secrets"})
+		r, err := e.Check("echo hi > /tmp/secrets/key.pem", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Allowed {
+			t.Error("deny_write resolved: expected DENY, got ALLOW")
+		}
+	})
+
+	t.Run("deny_write_unresolved", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:       "echo-with-deny",
+			Allow:      []config.Pattern{{Type: config.PatternPrefix, Pattern: "echo"}},
+			AllowWrite: []string{"/tmp/**"},
+			DenyWrite:  []string{"${SECRET_DIR}/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{}) // SECRET_DIR absent → sentinel
+		r, err := e.Check("echo hi > /tmp/out.txt", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Allowed {
+			t.Errorf("deny_write unresolved: expected ALLOW (sentinel must not fire), got DENY: %s", r.Reason)
+		}
+	})
+
+	// No-$ regression: entries without any $ must produce byte-identical behavior.
+	t.Run("no_dollar_regression", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:      "cat-static",
+			Allow:     []config.Pattern{{Type: config.PatternExact, Pattern: "cat"}},
+			AllowRead: []string{"/static/path/**"},
+		}
+		// With env and without env should both match /static/path/file.txt.
+		eWithEnv := newEnvEngine(t, rule, map[string]string{"SOME_VAR": "/other"})
+		eNoEnv := newTestEngine(t, []config.Rule{rule}, nil)
+		for _, e := range []*Engine{eWithEnv, eNoEnv} {
+			r, err := e.Check("cat < /static/path/file.txt", "/tmp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !r.Allowed {
+				t.Errorf("no_dollar_regression: expected ALLOW, got DENY: %s", r.Reason)
+			}
+		}
+	})
+
+	// Combined ~/: tilde expansion first, then var expansion.
+	t.Run("tilde_then_var_resolved", func(t *testing.T) {
+		t.Parallel()
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home dir available")
+		}
+		rule := config.Rule{
+			Name:      "cat-home-subdir",
+			Allow:     []config.Pattern{{Type: config.PatternExact, Pattern: "cat"}},
+			AllowRead: []string{"~/${SUBDIR}/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{"SUBDIR": "docs"})
+		target := filepath.Join(homeDir, "docs", "readme.txt")
+		r, rerr := e.Check("cat < "+target, "/tmp")
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if !r.Allowed {
+			t.Errorf("tilde_then_var: expected ALLOW for %s, got DENY: %s", target, r.Reason)
+		}
+	})
+
+	t.Run("tilde_then_var_unresolved", func(t *testing.T) {
+		t.Parallel()
+		rule := config.Rule{
+			Name:      "cat-home-subdir",
+			Allow:     []config.Pattern{{Type: config.PatternExact, Pattern: "cat"}},
+			AllowRead: []string{"~/${SUBDIR}/**"},
+		}
+		e := newEnvEngine(t, rule, map[string]string{}) // SUBDIR absent → sentinel
+		// Any read path should fail to match the unresolved sentinel.
+		r, err := e.Check("cat < /home/user/docs/readme.txt", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Allowed {
+			t.Error("tilde_then_var unresolved: expected DENY (sentinel), got ALLOW")
+		}
+	})
+}

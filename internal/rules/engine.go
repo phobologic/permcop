@@ -164,7 +164,7 @@ func compileRules(rules []config.Rule, homeDir string, env map[string]string) ([
 		cr[i].scopeConfigured, cr[i].scope = compileScopeEntries(r.PathScope, homeDir, env)
 		if !hasProjectRoot && ruleReferencesProjectRoot(r) {
 			cr[i].diagnostics = []string{
-				fmt.Sprintf("rule %q: ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.", r.Name),
+				fmt.Sprintf("rule %q: $PERMCOP_PROJECT_ROOT unresolved (no .git ancestor found above request CWD); rule effectively dropped.", r.Name),
 			}
 		}
 	}

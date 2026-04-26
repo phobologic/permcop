@@ -239,7 +239,12 @@ func runCheck() {
 		denyAndExit(fmt.Sprintf("permcop: unrecognized hook input format: %v", err))
 	}
 
-	engine, err := rules.New(cfg, logger, cwd)
+	startCWD := cwd
+	if in.Cwd != "" && filepath.IsAbs(in.Cwd) {
+		startCWD = in.Cwd
+	}
+
+	engine, err := rules.New(cfg, logger, startCWD)
 	if err != nil {
 		denyAndExit(fmt.Sprintf("permcop: invalid config pattern: %v", err))
 	}

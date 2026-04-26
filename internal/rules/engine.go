@@ -107,13 +107,20 @@ type compiledGlobPath struct {
 	g   glob.Glob // nil if compilation failed (treated as non-matching)
 }
 
-func newCompiledGlobPath(pattern, homeDir string) compiledGlobPath {
+func newCompiledGlobPath(pattern, homeDir string, env map[string]string) compiledGlobPath {
 	raw := pattern
 	if strings.HasPrefix(pattern, "~/") {
 		if homeDir == "" {
 			return compiledGlobPath{raw: raw}
 		}
 		pattern = homeDir + pattern[1:]
+	}
+	if strings.Contains(pattern, "$") {
+		expanded, ok := expandVarsNonEmpty(pattern, env)
+		if !ok {
+			return compiledGlobPath{raw: raw}
+		}
+		pattern = expanded
 	}
 	g, _ := glob.Compile(pattern, filepath.Separator)
 	return compiledGlobPath{raw: raw, g: g}
@@ -148,10 +155,10 @@ func compileRules(rules []config.Rule, homeDir string, env map[string]string) ([
 		if cr[i].deny, err = compilePatterns(r.Deny); err != nil {
 			return nil, fmt.Errorf("rule %q deny: %w", r.Name, err)
 		}
-		cr[i].allowRead = compileGlobPaths(r.AllowRead, homeDir)
-		cr[i].denyRead = compileGlobPaths(r.DenyRead, homeDir)
-		cr[i].allowWrite = compileGlobPaths(r.AllowWrite, homeDir)
-		cr[i].denyWrite = compileGlobPaths(r.DenyWrite, homeDir)
+		cr[i].allowRead = compileGlobPaths(r.AllowRead, homeDir, env)
+		cr[i].denyRead = compileGlobPaths(r.DenyRead, homeDir, env)
+		cr[i].allowWrite = compileGlobPaths(r.AllowWrite, homeDir, env)
+		cr[i].denyWrite = compileGlobPaths(r.DenyWrite, homeDir, env)
 		cr[i].scopeConfigured, cr[i].scope = compileScopeEntries(r.PathScope, homeDir, env)
 	}
 	return cr, nil
@@ -206,10 +213,10 @@ func compilePatterns(ps []config.Pattern) ([]compiledPattern, error) {
 	return out, nil
 }
 
-func compileGlobPaths(patterns []string, homeDir string) []compiledGlobPath {
+func compileGlobPaths(patterns []string, homeDir string, env map[string]string) []compiledGlobPath {
 	out := make([]compiledGlobPath, len(patterns))
 	for i, p := range patterns {
-		out[i] = newCompiledGlobPath(p, homeDir)
+		out[i] = newCompiledGlobPath(p, homeDir, env)
 	}
 	return out
 }

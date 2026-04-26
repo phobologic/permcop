@@ -52,6 +52,7 @@ type Entry struct {
 	CWD             string // working directory of the process that invoked the hook
 	Units           []parser.CheckableUnit
 	RuleMatches     []RuleMatch // per-unit match details; populated by the engine
+	Diagnostics     []string    // engine-level warnings attached to every entry while they are active
 }
 
 // Logger writes audit entries to a file.
@@ -225,6 +226,10 @@ func textLine(e Entry) string {
 		}
 	}
 
+	for _, d := range e.Diagnostics {
+		fmt.Fprintf(&sb, "  diag: %s\n", d)
+	}
+
 	return strings.TrimRight(sb.String(), "\n")
 }
 
@@ -279,6 +284,10 @@ func jsonLine(e Entry) (string, error) {
 			matches[i] = match
 		}
 		obj["rule_matches"] = matches
+	}
+
+	if len(e.Diagnostics) > 0 {
+		obj["diagnostics"] = e.Diagnostics
 	}
 
 	b, err := json.Marshal(obj)

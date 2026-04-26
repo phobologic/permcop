@@ -203,7 +203,18 @@ func ruleReferencesProjectRoot(r *config.Rule) bool {
 }
 
 func containsProjectRootRef(s string) bool {
-	return strings.Contains(s, "$PERMCOP_PROJECT_ROOT") || strings.Contains(s, "${PERMCOP_PROJECT_ROOT}")
+	const bare = "$PERMCOP_PROJECT_ROOT"
+	if i := strings.Index(s, bare); i >= 0 {
+		after := i + len(bare)
+		if after >= len(s) || !isIdentChar(s[after]) {
+			return true
+		}
+	}
+	return strings.Contains(s, "${PERMCOP_PROJECT_ROOT}")
+}
+
+func isIdentChar(c byte) bool {
+	return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 }
 
 // compileScopeEntries returns (configured, entries) for a PathScope slice.

@@ -208,3 +208,36 @@ func TestProjectRootExpandVariablesIsolation(t *testing.T) {
 		}
 	})
 }
+
+func TestContainsProjectRootRef(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		// exact bare ref at end of string
+		{"$PERMCOP_PROJECT_ROOT", true},
+		// bare ref followed by path separator (not an ident char)
+		{"$PERMCOP_PROJECT_ROOT/foo", true},
+		// braced form
+		{"${PERMCOP_PROJECT_ROOT}", true},
+		{"${PERMCOP_PROJECT_ROOT}/foo", true},
+		// false-positive: variable whose name starts with PERMCOP_PROJECT_ROOT
+		{"$PERMCOP_PROJECT_ROOT_BACKUP", false},
+		{"$PERMCOP_PROJECT_ROOT_EXTRA/path", false},
+		// unrelated string
+		{"$OTHER_VAR", false},
+		{"no refs here", false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			if got := containsProjectRootRef(tc.input); got != tc.want {
+				t.Errorf("containsProjectRootRef(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}

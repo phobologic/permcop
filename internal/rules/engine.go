@@ -141,9 +141,11 @@ type compiledRule struct {
 	denyWrite       []compiledGlobPath
 	scopeConfigured bool     // true iff source Rule.PathScope was non-nil
 	scope           []string // compiled, cleaned absolute paths from PathScope
+	diagnostics     []string // warnings emitted when PERMCOP_PROJECT_ROOT is referenced but unresolved
 }
 
 func compileRules(rules []config.Rule, homeDir string, env map[string]string) ([]compiledRule, error) {
+	_, hasProjectRoot := env["PERMCOP_PROJECT_ROOT"]
 	cr := make([]compiledRule, len(rules))
 	for i := range rules {
 		r := &rules[i]
@@ -160,8 +162,48 @@ func compileRules(rules []config.Rule, homeDir string, env map[string]string) ([
 		cr[i].allowWrite = compileGlobPaths(r.AllowWrite, homeDir, env)
 		cr[i].denyWrite = compileGlobPaths(r.DenyWrite, homeDir, env)
 		cr[i].scopeConfigured, cr[i].scope = compileScopeEntries(r.PathScope, homeDir, env)
+		if !hasProjectRoot && ruleReferencesProjectRoot(r) {
+			cr[i].diagnostics = []string{
+				fmt.Sprintf("rule %q: ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.", r.Name),
+			}
+		}
 	}
 	return cr, nil
+}
+
+// ruleReferencesProjectRoot reports whether any path-glob field of r contains
+// a reference to $PERMCOP_PROJECT_ROOT or ${PERMCOP_PROJECT_ROOT}.
+func ruleReferencesProjectRoot(r *config.Rule) bool {
+	for _, s := range r.PathScope {
+		if containsProjectRootRef(s) {
+			return true
+		}
+	}
+	for _, s := range r.AllowRead {
+		if containsProjectRootRef(s) {
+			return true
+		}
+	}
+	for _, s := range r.AllowWrite {
+		if containsProjectRootRef(s) {
+			return true
+		}
+	}
+	for _, s := range r.DenyRead {
+		if containsProjectRootRef(s) {
+			return true
+		}
+	}
+	for _, s := range r.DenyWrite {
+		if containsProjectRootRef(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsProjectRootRef(s string) bool {
+	return strings.Contains(s, "$PERMCOP_PROJECT_ROOT") || strings.Contains(s, "${PERMCOP_PROJECT_ROOT}")
 }
 
 // compileScopeEntries returns (configured, entries) for a PathScope slice.
@@ -235,6 +277,7 @@ type Engine struct {
 	env           map[string]string // variable environment for expand_variables; nil = use os.Environ()
 	homeDir       string            // resolved once at construction for ~/ expansion in file patterns
 	compiledRules []compiledRule    // pre-compiled patterns for all rules
+	diagnostics   []string          // engine-level deduplicated warnings; attached to every audit entry
 }
 
 // New creates an Engine using the process environment for variable expansion.
@@ -255,6 +298,7 @@ func New(cfg *config.Config, logger *audit.Logger, startCWD string) (*Engine, er
 		env:           env,
 		homeDir:       homeDir,
 		compiledRules: cr,
+		diagnostics:   aggregateDiagnostics(cr),
 	}, nil
 }
 
@@ -276,7 +320,23 @@ func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string,
 		env:           cloned,
 		homeDir:       homeDir,
 		compiledRules: cr,
+		diagnostics:   aggregateDiagnostics(cr),
 	}, nil
+}
+
+// aggregateDiagnostics collects and deduplicates diagnostics from all compiled rules.
+func aggregateDiagnostics(crs []compiledRule) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, cr := range crs {
+		for _, d := range cr.diagnostics {
+			if _, ok := seen[d]; !ok {
+				seen[d] = struct{}{}
+				out = append(out, d)
+			}
+		}
+	}
+	return out
 }
 
 // cloneEnv returns a shallow copy of src. Never returns nil.
@@ -317,6 +377,9 @@ func osEnvMap() map[string]string {
 // operators know when auditing is broken. For a security enforcement tool,
 // silently dropping audit records is unacceptable.
 func (e *Engine) logAudit(entry audit.Entry) {
+	if len(e.diagnostics) > 0 {
+		entry.Diagnostics = e.diagnostics
+	}
 	if err := e.logger.Log(entry); err != nil {
 		fmt.Fprintf(os.Stderr, "permcop: audit log error: %v\n", err)
 	}

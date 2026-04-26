@@ -269,3 +269,115 @@ func TestLoggerCloseIdempotent(t *testing.T) {
 		t.Fatalf("Close on unused logger: %v", err)
 	}
 }
+
+func TestDiagnosticsTextRendering(t *testing.T) {
+	t.Parallel()
+
+	t.Run("SingleDiagRendered", func(t *testing.T) {
+		t.Parallel()
+		line := textLine(Entry{
+			Timestamp:       time.Now(),
+			Decision:        DecisionDeny,
+			OriginalCommand: "ls /repo",
+			Diagnostics:     []string{`rule "my-rule": ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.`},
+		})
+		if !strings.Contains(line, "  diag: ") {
+			t.Errorf("expected diag: line in text output; got:\n%s", line)
+		}
+		if !strings.Contains(line, "PERMCOP_PROJECT_ROOT") {
+			t.Errorf("expected PERMCOP_PROJECT_ROOT in diag line; got:\n%s", line)
+		}
+	})
+
+	t.Run("MultipleDiagsEachOnOwnLine", func(t *testing.T) {
+		t.Parallel()
+		line := textLine(Entry{
+			Timestamp:       time.Now(),
+			Decision:        DecisionDeny,
+			OriginalCommand: "ls /repo",
+			Diagnostics:     []string{"diag one", "diag two"},
+		})
+		if !strings.Contains(line, "  diag: diag one") {
+			t.Errorf("expected first diag line; got:\n%s", line)
+		}
+		if !strings.Contains(line, "  diag: diag two") {
+			t.Errorf("expected second diag line; got:\n%s", line)
+		}
+	})
+
+	t.Run("NoDiagsNoLine", func(t *testing.T) {
+		t.Parallel()
+		line := textLine(Entry{
+			Timestamp:       time.Now(),
+			Decision:        DecisionAllow,
+			OriginalCommand: "git status",
+		})
+		if strings.Contains(line, "diag:") {
+			t.Errorf("expected no diag: line when Diagnostics is empty; got:\n%s", line)
+		}
+	})
+}
+
+func TestDiagnosticsJSONRendering(t *testing.T) {
+	t.Parallel()
+
+	t.Run("DiagsPresentInJSON", func(t *testing.T) {
+		t.Parallel()
+		line, err := jsonLine(Entry{
+			Timestamp:       time.Now(),
+			Decision:        DecisionDeny,
+			OriginalCommand: "ls /repo",
+			Diagnostics:     []string{"diag message"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(line, `"diagnostics"`) {
+			t.Errorf("expected diagnostics key in JSON; got: %s", line)
+		}
+		if !strings.Contains(line, "diag message") {
+			t.Errorf("expected diag message value in JSON; got: %s", line)
+		}
+	})
+
+	t.Run("DiagOmittedWhenEmpty", func(t *testing.T) {
+		t.Parallel()
+		line, err := jsonLine(Entry{
+			Timestamp:       time.Now(),
+			Decision:        DecisionAllow,
+			OriginalCommand: "git status",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(line, `"diagnostics"`) {
+			t.Errorf("expected diagnostics key absent from JSON when empty; got: %s", line)
+		}
+	})
+}
+
+func TestDiagnosticsLoggedViaLogger(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	logger := New(path, "text", 0, 0)
+	t.Cleanup(func() { _ = logger.Close() })
+
+	if err := logger.Log(Entry{
+		Timestamp:       time.Now(),
+		Decision:        DecisionDeny,
+		OriginalCommand: "ls /repo",
+		Diagnostics:     []string{"rule unresolved warning"},
+	}); err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if !strings.Contains(string(data), "rule unresolved warning") {
+		t.Errorf("expected diagnostic in log file; got:\n%s", string(data))
+	}
+}

@@ -204,11 +204,17 @@ func ruleReferencesProjectRoot(r *config.Rule) bool {
 
 func containsProjectRootRef(s string) bool {
 	const bare = "$PERMCOP_PROJECT_ROOT"
-	if i := strings.Index(s, bare); i >= 0 {
+	rem := s
+	for {
+		i := strings.Index(rem, bare)
+		if i < 0 {
+			break
+		}
 		after := i + len(bare)
-		if after >= len(s) || !isIdentChar(s[after]) {
+		if after >= len(rem) || !isIdentChar(rem[after]) {
 			return true
 		}
+		rem = rem[after:]
 	}
 	return strings.Contains(s, "${PERMCOP_PROJECT_ROOT}")
 }

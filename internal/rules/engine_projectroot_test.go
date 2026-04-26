@@ -226,6 +226,10 @@ func TestContainsProjectRootRef(t *testing.T) {
 		// false-positive: variable whose name starts with PERMCOP_PROJECT_ROOT
 		{"$PERMCOP_PROJECT_ROOT_BACKUP", false},
 		{"$PERMCOP_PROJECT_ROOT_EXTRA/path", false},
+		// multi-occurrence: first hit is a prefix false-positive, second is a real ref
+		{"$PERMCOP_PROJECT_ROOT_BACKUP/x $PERMCOP_PROJECT_ROOT/y", true},
+		// multi-occurrence: all hits are prefix false-positives
+		{"$PERMCOP_PROJECT_ROOT_BACKUP $PERMCOP_PROJECT_ROOT_EXTRA", false},
 		// unrelated string
 		{"$OTHER_VAR", false},
 		{"no refs here", false},

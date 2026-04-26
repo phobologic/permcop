@@ -21,7 +21,7 @@ func TestWriteExplainResult_PathScopeSkippedRule(t *testing.T) {
 	}
 	cfg := &config.Config{Rules: []config.Rule{rule}}
 	logger := audit.New(os.DevNull, "text", 0, 0)
-	engine, err := rules.New(cfg, logger)
+	engine, err := rules.New(cfg, logger, "")
 	if err != nil {
 		t.Fatal(err)
 	}

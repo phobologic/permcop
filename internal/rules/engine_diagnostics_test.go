@@ -7,6 +7,7 @@ import (
 
 	"github.com/phobologic/permcop/internal/audit"
 	"github.com/phobologic/permcop/internal/config"
+	"github.com/phobologic/permcop/internal/parser"
 )
 
 // diagRule returns a rule that references $PERMCOP_PROJECT_ROOT in the given field.
@@ -218,6 +219,62 @@ func TestNoDiagnosticForOtherUnresolvedVariables(t *testing.T) {
 	}
 	if len(e.diagnostics) != 0 {
 		t.Errorf("expected no diagnostic for unrelated unresolved variable; got: %v", e.diagnostics)
+	}
+}
+
+func TestFallThroughCheckCarriesDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	// Rule references PERMCOP_PROJECT_ROOT but no command allow pattern → any
+	// command falls through (no covering rule). With an unresolved project root
+	// the engine must still propagate diagnostics onto Result.Entry.Diagnostics.
+	cfg := &config.Config{
+		Defaults: defaultsForTest(),
+		Rules:    []config.Rule{diagRuleWithField("write-rule", "allow_write")},
+	}
+	logger := audit.New(os.DevNull, "", 0, 0)
+	e, err := NewWithEnv(cfg, logger, map[string]string{}, "/nonexistent/cwd/xyz-permcop-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := e.Check("touch /tmp/foo", "/nonexistent/cwd/xyz-permcop-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.FallThrough {
+		t.Fatalf("expected fall-through; got Allowed=%v Reason=%q", result.Allowed, result.Reason)
+	}
+	if len(result.Diagnostics) == 0 {
+		t.Error("fall-through result.Diagnostics must be non-empty when engine has active diagnostics")
+	}
+}
+
+func TestFallThroughCheckFileCarriesDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	// Rule has allow_write referencing PERMCOP_PROJECT_ROOT. With an unresolved
+	// project root the glob compiles to nil and never matches, so any CheckFile
+	// call falls through. The engine must propagate diagnostics onto the result.
+	cfg := &config.Config{
+		Defaults: defaultsForTest(),
+		Rules:    []config.Rule{diagRuleWithField("write-rule", "allow_write")},
+	}
+	logger := audit.New(os.DevNull, "", 0, 0)
+	e, err := NewWithEnv(cfg, logger, map[string]string{}, "/nonexistent/cwd/xyz-permcop-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := e.CheckFile("/tmp/testfile.txt", parser.UnitWriteFile, "/nonexistent/cwd/xyz-permcop-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.FallThrough {
+		t.Fatalf("expected fall-through; got Allowed=%v Reason=%q", result.Allowed, result.Reason)
+	}
+	if len(result.Diagnostics) == 0 {
+		t.Error("fall-through result.Diagnostics must be non-empty when engine has active diagnostics")
 	}
 }
 

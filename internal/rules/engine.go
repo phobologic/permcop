@@ -231,11 +231,14 @@ type Engine struct {
 }
 
 // New creates an Engine using the process environment for variable expansion.
+// startCWD is used to resolve PERMCOP_PROJECT_ROOT for path_scope compilation only;
+// it does not affect the env used by expand_variables at runtime.
 // Returns an error if any rule contains an invalid glob or regex pattern.
-func New(cfg *config.Config, logger *audit.Logger) (*Engine, error) {
+func New(cfg *config.Config, logger *audit.Logger, startCWD string) (*Engine, error) {
 	homeDir, _ := os.UserHomeDir()
 	env := osEnvMap()
-	cr, err := compileRules(cfg.Rules, homeDir, env)
+	pathEnv := buildPathEnv(env, startCWD)
+	cr, err := compileRules(cfg.Rules, homeDir, pathEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -249,20 +252,46 @@ func New(cfg *config.Config, logger *audit.Logger) (*Engine, error) {
 }
 
 // NewWithEnv creates an Engine with an explicit environment map, primarily for testing.
+// startCWD is used to resolve PERMCOP_PROJECT_ROOT for path_scope compilation only;
+// the caller's env map is never mutated.
 // Returns an error if any rule contains an invalid glob or regex pattern.
-func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string) (*Engine, error) {
+func NewWithEnv(cfg *config.Config, logger *audit.Logger, env map[string]string, startCWD string) (*Engine, error) {
 	homeDir, _ := os.UserHomeDir()
-	cr, err := compileRules(cfg.Rules, homeDir, env)
+	cloned := cloneEnv(env)
+	pathEnv := buildPathEnv(env, startCWD)
+	cr, err := compileRules(cfg.Rules, homeDir, pathEnv)
 	if err != nil {
 		return nil, err
 	}
 	return &Engine{
 		cfg:           cfg,
 		logger:        logger,
-		env:           env,
+		env:           cloned,
 		homeDir:       homeDir,
 		compiledRules: cr,
 	}, nil
+}
+
+// cloneEnv returns a shallow copy of src. Never returns nil.
+func cloneEnv(src map[string]string) map[string]string {
+	m := make(map[string]string, len(src))
+	for k, v := range src {
+		m[k] = v
+	}
+	return m
+}
+
+// buildPathEnv clones src and injects PERMCOP_PROJECT_ROOT based on startCWD resolution.
+// On success, the key is set to the resolved absolute project root.
+// On failure (no .git found, or invalid CWD), the key is absent even if it existed in src.
+func buildPathEnv(src map[string]string, startCWD string) map[string]string {
+	m := cloneEnv(src)
+	if root, ok := resolveProjectRoot(startCWD); ok {
+		m["PERMCOP_PROJECT_ROOT"] = root
+	} else {
+		delete(m, "PERMCOP_PROJECT_ROOT")
+	}
+	return m
 }
 
 // osEnvMap converts os.Environ() into a map for fast lookup.

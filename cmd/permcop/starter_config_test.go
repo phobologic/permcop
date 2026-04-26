@@ -49,7 +49,7 @@ path_scope = ["${PROJECT_DIR}"]
 	if err != nil {
 		t.Fatalf("LoadFile rejected uncommented path_scope example: %v", err)
 	}
-	if err := validatePatterns(cfg); err != nil {
+	if err := validatePatterns(cfg, ""); err != nil {
 		t.Errorf("validatePatterns rejected uncommented path_scope example: %v", err)
 	}
 }

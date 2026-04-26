@@ -32,9 +32,9 @@ func newTestEngineWithEnv(t *testing.T, rules []config.Rule, defaults *config.De
 		err error
 	)
 	if env == nil {
-		e, err = New(cfg, logger)
+		e, err = New(cfg, logger, "")
 	} else {
-		e, err = NewWithEnv(cfg, logger, env)
+		e, err = NewWithEnv(cfg, logger, env, "")
 	}
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)

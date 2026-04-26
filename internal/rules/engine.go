@@ -162,23 +162,42 @@ func compileRules(rules []config.Rule, homeDir string, env map[string]string) ([
 		cr[i].allowWrite = compileGlobPaths(r.AllowWrite, homeDir, env)
 		cr[i].denyWrite = compileGlobPaths(r.DenyWrite, homeDir, env)
 		cr[i].scopeConfigured, cr[i].scope = compileScopeEntries(r.PathScope, homeDir, env)
-		if !hasProjectRoot && ruleReferencesProjectRoot(r) {
-			cr[i].diagnostics = []string{
-				fmt.Sprintf("rule %q: ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.", r.Name),
+		if !hasProjectRoot {
+			scopeRef := pathScopeReferencesProjectRoot(r)
+			globRef := globFieldsReferenceProjectRoot(r)
+			if scopeRef {
+				cr[i].diagnostics = []string{
+					fmt.Sprintf("rule %q: ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); rule effectively dropped.", r.Name),
+				}
+			} else if globRef {
+				cr[i].diagnostics = []string{
+					fmt.Sprintf("rule %q: ${PERMCOP_PROJECT_ROOT} unresolved (no .git ancestor found above request CWD); path-glob constraints (allow_read/allow_write/deny_read/deny_write) are ineffective, but command-level allow/deny patterns still apply.", r.Name),
+				}
 			}
 		}
 	}
 	return cr, nil
 }
 
-// ruleReferencesProjectRoot reports whether any path-glob field of r contains
-// a reference to $PERMCOP_PROJECT_ROOT or ${PERMCOP_PROJECT_ROOT}.
-func ruleReferencesProjectRoot(r *config.Rule) bool {
+// pathScopeReferencesProjectRoot reports whether any path_scope entry of r
+// contains a reference to $PERMCOP_PROJECT_ROOT or ${PERMCOP_PROJECT_ROOT}.
+// When true and the variable is unresolved, the rule is effectively dropped
+// because its scope becomes empty.
+func pathScopeReferencesProjectRoot(r *config.Rule) bool {
 	for _, s := range r.PathScope {
 		if containsProjectRootRef(s) {
 			return true
 		}
 	}
+	return false
+}
+
+// globFieldsReferenceProjectRoot reports whether any path-glob field
+// (allow_read, allow_write, deny_read, deny_write) of r contains a reference
+// to $PERMCOP_PROJECT_ROOT or ${PERMCOP_PROJECT_ROOT}.
+// When true and the variable is unresolved, only those glob constraints become
+// inoperative; command-level allow/deny patterns still apply.
+func globFieldsReferenceProjectRoot(r *config.Rule) bool {
 	for _, s := range r.AllowRead {
 		if containsProjectRootRef(s) {
 			return true

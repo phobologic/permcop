@@ -222,13 +222,16 @@ func runCheck() {
 
 	logger := audit.New(cfg.Defaults.LogFile, cfg.Defaults.LogFormat, cfg.Defaults.LogMaxSizeMB, cfg.Defaults.LogMaxFiles)
 
+	// denyCWD starts as the process CWD and is updated to the hook payload's cwd
+	// once the hook input has been parsed. The closure always logs the current value.
+	denyCWD := cwd
 	denyAndExit := func(reason string) {
 		_ = logger.Log(audit.Entry{
 			Timestamp:       time.Now(),
 			Decision:        audit.DecisionDeny,
 			Reason:          reason,
 			OriginalCommand: "(unknown — hook input error)",
-			CWD:             cwd,
+			CWD:             denyCWD,
 		})
 		writeHookDecision("deny", reason)
 		os.Exit(0)
@@ -239,7 +242,13 @@ func runCheck() {
 		denyAndExit(fmt.Sprintf("permcop: unrecognized hook input format: %v", err))
 	}
 
-	engine, err := rules.New(cfg, logger, cwd)
+	startCWD := cwd
+	if in.Cwd != "" && filepath.IsAbs(in.Cwd) {
+		startCWD = in.Cwd
+	}
+	denyCWD = startCWD
+
+	engine, err := rules.New(cfg, logger, startCWD)
 	if err != nil {
 		denyAndExit(fmt.Sprintf("permcop: invalid config pattern: %v", err))
 	}
@@ -250,7 +259,7 @@ func runCheck() {
 		if in.Bash == nil || in.Bash.Command == "" {
 			denyAndExit("permcop: empty command in Bash hook input")
 		}
-		result, err = engine.Check(in.Bash.Command, cwd)
+		result, err = engine.Check(in.Bash.Command, startCWD)
 		if err != nil {
 			denyAndExit(fmt.Sprintf("permcop: check error: %v", err))
 		}
@@ -259,8 +268,8 @@ func runCheck() {
 		if in.File == nil || in.File.FilePath == "" {
 			denyAndExit("permcop: empty file_path in Read hook input")
 		}
-		path := absolutePath(in.File.FilePath, cwd)
-		result, err = engine.CheckFile(path, parser.UnitReadFile, cwd)
+		path := absolutePath(in.File.FilePath, startCWD)
+		result, err = engine.CheckFile(path, parser.UnitReadFile, startCWD)
 		if err != nil {
 			denyAndExit(fmt.Sprintf("permcop: check error: %v", err))
 		}
@@ -269,8 +278,8 @@ func runCheck() {
 		if in.File == nil || in.File.FilePath == "" {
 			denyAndExit(fmt.Sprintf("permcop: empty file_path in %s hook input", in.Kind))
 		}
-		path := absolutePath(in.File.FilePath, cwd)
-		result, err = engine.CheckFile(path, parser.UnitWriteFile, cwd)
+		path := absolutePath(in.File.FilePath, startCWD)
+		result, err = engine.CheckFile(path, parser.UnitWriteFile, startCWD)
 		if err != nil {
 			denyAndExit(fmt.Sprintf("permcop: check error: %v", err))
 		}

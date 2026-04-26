@@ -21,9 +21,13 @@ const (
 )
 
 // Input is the raw hook JSON, decoded into the common envelope.
+// Fields match the top-level Claude Code PreToolUse hook payload.
 type Input struct {
-	ToolName  string          `json:"tool_name"`
-	ToolInput json.RawMessage `json:"tool_input"`
+	SessionID      string          `json:"session_id"`
+	TranscriptPath string          `json:"transcript_path"`
+	ToolName       string          `json:"tool_name"`
+	ToolInput      json.RawMessage `json:"tool_input"`
+	Cwd            string          `json:"cwd"`
 }
 
 // BashInput holds the Bash tool's parameters.
@@ -40,6 +44,7 @@ type FileInput struct {
 // ParsedInput is the result of decoding a hook request into a typed value.
 type ParsedInput struct {
 	Kind ToolKind
+	Cwd  string
 	Bash *BashInput
 	File *FileInput
 }
@@ -86,7 +91,7 @@ func ReadInput(r io.Reader) (*ParsedInput, error) {
 	}
 
 	kind := ToolKind(envelope.ToolName)
-	parsed := &ParsedInput{Kind: kind}
+	parsed := &ParsedInput{Kind: kind, Cwd: envelope.Cwd}
 
 	switch kind {
 	case ToolBash:

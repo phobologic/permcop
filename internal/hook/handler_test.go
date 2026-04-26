@@ -90,6 +90,32 @@ func TestReadInput_ExceedsLimit(t *testing.T) {
 	}
 }
 
+func TestReadInput_CwdPopulated(t *testing.T) {
+	t.Parallel()
+
+	input := `{"tool_name":"Bash","tool_input":{"command":"ls","description":"list"},"cwd":"/home/user/project"}`
+	got, err := ReadInput(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("ReadInput: %v", err)
+	}
+	if got.Cwd != "/home/user/project" {
+		t.Errorf("Cwd: got %q, want %q", got.Cwd, "/home/user/project")
+	}
+}
+
+func TestReadInput_CwdMissing(t *testing.T) {
+	t.Parallel()
+
+	input := `{"tool_name":"Bash","tool_input":{"command":"ls","description":"list"}}`
+	got, err := ReadInput(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("ReadInput: %v", err)
+	}
+	if got.Cwd != "" {
+		t.Errorf("Cwd: got %q, want empty string", got.Cwd)
+	}
+}
+
 func TestReadInput_AtLimit(t *testing.T) {
 	t.Parallel()
 

@@ -222,7 +222,24 @@ func globFieldsReferenceProjectRoot(r *config.Rule) bool {
 }
 
 func containsProjectRootRef(s string) bool {
-	return strings.Contains(s, "$PERMCOP_PROJECT_ROOT") || strings.Contains(s, "${PERMCOP_PROJECT_ROOT}")
+	const bare = "$PERMCOP_PROJECT_ROOT"
+	rem := s
+	for {
+		i := strings.Index(rem, bare)
+		if i < 0 {
+			break
+		}
+		after := i + len(bare)
+		if after >= len(rem) || !isIdentChar(rem[after]) {
+			return true
+		}
+		rem = rem[after:]
+	}
+	return strings.Contains(s, "${PERMCOP_PROJECT_ROOT}")
+}
+
+func isIdentChar(c byte) bool {
+	return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 }
 
 // compileScopeEntries returns (configured, entries) for a PathScope slice.

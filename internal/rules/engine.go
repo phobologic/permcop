@@ -589,6 +589,7 @@ func (e *Engine) Check(command, cwd string) (*Result, error) {
 				SkippedRules: skippedRules,
 			})
 			entry.RuleMatches = allowMatches
+			entry.Diagnostics = e.diagnostics
 			return &Result{Entry: entry, FallThrough: true}, nil
 		}
 	}
@@ -677,6 +678,7 @@ func (e *Engine) CheckFile(path string, kind parser.UnitKind, cwd string) (*Resu
 		Unit:   unit.Value,
 		Action: "deny",
 	}}
+	entry.Diagnostics = e.diagnostics
 	return &Result{Entry: entry, FallThrough: true}, nil
 }
 

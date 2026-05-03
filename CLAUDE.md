@@ -39,6 +39,29 @@ make cover      # coverage report → coverage.html
 - Per-project: `.permcop.toml` (searched from CWD upward to home; project rules prepend global rules)
 - Audit log: `~/.local/share/permcop/audit.log` (default)
 
+## Release notes
+
+Releases are cut by pushing an annotated tag (`vX.Y.Z`); goreleaser pipes the
+tag body straight into the GitHub release via `{{ .TagBody }}`. Tag bodies
+follow this shape:
+
+1. **Movie-style title + tagline.** One line in the format
+   `*The Project Root Job* — Permission boundaries just got a whole lot badder!`
+   The title is a stylized 70s-cop-movie name; the tagline is a punchy
+   one-liner promising what's new. The name "permcop" puns on *perm* (the
+   permanent curly haircut, hence the mascot) and *cop* — lean into the
+   haircut and the beat-cop voice ("Freeze!", "Book 'em", "Case closed").
+2. **Promo blurb (1–3 sentences).** Campy cop-show voice aimed at friends and
+   social sharing — funny, but the headline feature still has to be legible
+   to someone who's never used the tool.
+3. **Blank line, then plain-language body** under `## Highlights`, `## Fixes`,
+   and `## Docs` (omit sections that don't apply). Cover every user-facing
+   change since the previous tag — features, behavior changes, fixes, doc
+   updates — in plain prose, not commit-log shorthand.
+
+Draft the tag body in `.tmp/vX.Y.Z-tag.txt`, create the tag with
+`git tag -a vX.Y.Z -F .tmp/vX.Y.Z-tag.txt`, and let the user push.
+
 ## Go conventions
 
 Follow the rules in `~/.claude/CLAUDE.md` (global Go rules). Additionally:

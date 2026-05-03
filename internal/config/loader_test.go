@@ -2,8 +2,10 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -909,4 +911,78 @@ allow = [{type="prefx", pattern="git status"}]
 	if err == nil {
 		t.Error("expected error for unknown pattern type, got nil")
 	}
+}
+
+// TestLoad_AllDefaultsFieldsPropagate guards against drift between the
+// Defaults struct and the per-field copy logic in mergeAll. For each field in
+// Defaults, write a global config that sets only that field, call Load, and
+// assert the value survives. If someone adds a Defaults field without
+// teaching mergeAll about it, this test will fail.
+func TestLoad_AllDefaultsFieldsPropagate(t *testing.T) {
+	defaultsType := reflect.TypeOf(Defaults{})
+	for i := 0; i < defaultsType.NumField(); i++ {
+		f := defaultsType.Field(i)
+		t.Run(f.Name, func(t *testing.T) {
+			tomlKey := f.Tag.Get("toml")
+			if comma := strings.Index(tomlKey, ","); comma >= 0 {
+				tomlKey = tomlKey[:comma]
+			}
+			if tomlKey == "" {
+				t.Fatalf("%s: missing toml tag", f.Name)
+			}
+
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+
+			want, repr, ok := nonZeroForTest(f, home)
+			if !ok {
+				t.Fatalf("%s: no non-zero generator for type %v — extend nonZeroForTest", f.Name, f.Type)
+			}
+			cfgDir := filepath.Join(home, ".config", "permcop")
+			if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			tomlText := fmt.Sprintf("[defaults]\n%s = %s\n", tomlKey, repr)
+			if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(tomlText), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			cwd := t.TempDir()
+			cfg, err := Load(cwd)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			got := reflect.ValueOf(cfg.Defaults).FieldByName(f.Name).Interface()
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s (toml %q): got %v, want %v — likely missing from mergeAll",
+					f.Name, tomlKey, got, want)
+			}
+		})
+	}
+}
+
+// nonZeroForTest returns a non-zero test value for a Defaults field along
+// with its TOML representation. Fields with semantic constraints (e.g.
+// UnknownVariableAction must be a known value, LogFile must not start with
+// "~/" since applyDefaults rewrites it) get special-cased here.
+func nonZeroForTest(f reflect.StructField, home string) (any, string, bool) {
+	switch f.Name {
+	case "LogFile":
+		// applyDefaults rewrites "~/..." → absolute and rejects paths outside HOME.
+		return filepath.Join(home, "audit.log"), `"~/audit.log"`, true
+	case "LogFormat":
+		return "json", `"json"`, true
+	case "UnknownVariableAction":
+		return VariableActionWarn, `"warn"`, true
+	}
+	switch f.Type.Kind() {
+	case reflect.Bool:
+		return true, "true", true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return reflect.ValueOf(int64(7)).Convert(f.Type).Interface(), "7", true
+	case reflect.String:
+		return reflect.ValueOf("x").Convert(f.Type).Interface(), `"x"`, true
+	}
+	return nil, "", false
 }

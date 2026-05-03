@@ -291,6 +291,9 @@ func mergeAll(layers ...*Config) *Config {
 		if !result.Defaults.AllowSudo && layer.Defaults.AllowSudo {
 			result.Defaults.AllowSudo = true
 		}
+		if !result.Defaults.StripCommandPath && layer.Defaults.StripCommandPath {
+			result.Defaults.StripCommandPath = true
+		}
 		if result.Defaults.SubshellDepthLimit == 0 && layer.Defaults.SubshellDepthLimit != 0 {
 			result.Defaults.SubshellDepthLimit = layer.Defaults.SubshellDepthLimit
 		}
